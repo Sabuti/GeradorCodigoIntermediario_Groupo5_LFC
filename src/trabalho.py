@@ -5,6 +5,7 @@
 # Nome do grupo no Canvas: RA4 5
 
 import sys
+import math
 
 EPS = 'E'
 
@@ -855,10 +856,6 @@ def analisarSemanticaMemoria(tabela_simbolos, numero_linha, memorias_declaradas_
         if info['linha_declaracao'] == numero_linha:
             continue
 
-        # 🔹 Se foi inicializada, mas nunca usada depois # é pra dar erro?
-        #if info['inicializada'] and not info['usada']:
-        #    erros.append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Memória '{nome}' declarada mas não utilizada")
-
     return erros
 
 # -------------------------
@@ -887,10 +884,727 @@ def gerarArvoreAtribuida(arvore_anotada, tipo_final, numero_linha):
 
 ## FASE 4: TAC, ASSEMBLY E OTIMIZAÇÕES
 
-#def gerarTAC(arvore_atribuida)
-#def otimizarTAC(tac)
-#def gerarAssembly(tacOtimizado)
+# A convenção usada:
+# - temporários gerados: t1, t2, t3, ...
+# - variáveis globais são escritas como rótulos .word
+# - floats são convertidos para Q8.8 e armazenados como inteiros (16 bits)
 
+TEMP_COUNTER = 0
+def novo_temp():
+    global TEMP_COUNTER
+    TEMP_COUNTER += 1
+    return f"t{TEMP_COUNTER}"
+
+def int_to_q8_8_integer(value_float):
+    # converte float -> Q8.8 int (arredonda)
+    return int(round(value_float * 256.0))
+
+def gerarTAC(arvore_atribuida):
+    pass
+
+def otimizarTAC(tac):
+    pass
+
+# -------------------------
+# Gerador de Assembly (contém rotinas UART e print hex)
+PROLOGO = """
+    .include "m328pdef.inc"
+    .cseg
+    .org 0x0000
+    rjmp main
+"""
+
+EPILOGO = """
+; fim do programa - trava
+fim:
+    rjmp fim
+"""
+
+# seção dados e helpers
+def mapear_variaveis(tac, tabela_simbolos):
+    """Mapeia variáveis com seus tipos (int ou float/Q8.8)"""
+    vars_map = {}
+    for inst in tac:
+        for campo in ["a", "b", "dest"]:
+            if campo in inst:
+                val = inst[campo]
+                if isinstance(val, str) and not val.startswith('label_'):
+                    if val not in vars_map:
+                        # Busca tipo na tabela de símbolos
+                        info = tabela_simbolos.get(val)
+                        tipo = info['tipo'] if info else inst.get('tipo', 'int')
+                        vars_map[val] = {'tipo': tipo, 'storage': '.word 0'}
+    return vars_map
+
+def gerar_secao_dados(vars_map):
+    saida = [".dseg", ".org 0x0100"]  # coloca dados na SRAM? OBS: .dseg+labels: Para .s puro com .data, isso é simplista.
+    # Para compatibilidade com avr-gcc, geraremos .data no formato simples:
+    # Porém .s e .include podem aceitar .data/.text; usamos versão simples:
+    data_lines = [".data"]
+    for nome, tipo in vars_map.items():
+        data_lines.append(f"{nome}:\t{tipo}")
+    data_lines.append(".text")
+    return "\n".join(data_lines)
+
+# gerar carregamento de operando
+def load_operand(op, regL, regH):
+    """Gera código para mover variável/imediato → registradores (little-endian: low em regL)"""
+    if isinstance(op, int):
+        lo = op & 0xFF
+        hi = (op >> 8) & 0xFF
+        return f"\n    ldi {regL}, {lo}\n    ldi {regH}, {hi}\n"
+    else:
+        # assume label word (little endian)
+        return f"\n    lds {regL}, {op}\n    lds {regH}, {op}+1\n"
+
+# rotinas aritméticas já previstas (simplificadas)
+def gerar_mul16():
+    return """
+    ; --- MUL16: A=r22:r23, B=r24:r25 => Ret=r20:r21 ---
+    clr  r20
+    clr  r21
+
+    mul  r23, r25
+    mov  r20, r0
+    mov  r21, r1
+
+    mul  r22, r25
+    add  r21, r0
+
+    mul  r23, r24
+    add  r21, r0
+
+    clr  r1
+"""
+
+def gerar_div16():
+    return """
+    ; --- DIV16 por subtrações sucessivas ---
+    clr  r20
+    clr  r21
+
+div_loop:
+    cp   r22, r24
+    cpc  r23, r25
+    brlo div_done
+
+    sub  r23, r25
+    sbc  r22, r24
+
+    inc  r21
+    brne div_loop
+    inc  r20
+    rjmp div_loop
+
+div_done:
+    ; resto em r22:r23, quociente em r20:r21
+"""
+
+def gerar_pow16():
+    return """
+    ; --- POW16: A^B, A=r22:r23, B=r24:r25 ---
+    ; implementação simples por multiplicações sucessivas (assume Expoente 8-bit)
+    ldi r20, 1
+    ldi r21, 0
+    tst r25
+    brne pow_loop
+    tst r24
+    breq pow_end
+pow_loop:
+    ; multiplicar r20:r21 *= r22:r23
+    ; salva ret em r26:r27 e A em r28:r29 para uso do mul sequence
+    movw r26, r20
+    movw r28, r22
+
+    clr r20
+    clr r21
+
+    mul r27, r29
+    mov r20, r0
+    mov r21, r1
+
+    mul r26, r29
+    add r21, r0
+
+    mul r27, r28
+    add r21, r0
+
+    clr r1
+
+    ; decrementa expoente (r24:r25)
+    subi r24, 1
+    sbci r25, 0
+    tst r24
+    brne pow_loop
+    tst r25
+    brne pow_loop
+pow_end:
+"""
+
+# Routines UART / print hex (16-bit)
+ROTINAS_UART = r"""
+; ----------------------------
+; UART routines (9600 @ 16MHz)
+; ----------------------------
+
+UART_init:
+    ; Set baud 9600 @16MHz: UBRR0 = 103
+    ldi r16, 0
+    sts UBRR0H, r16
+    ldi r16, 103
+    sts UBRR0L, r16
+    ; enable TX
+    ldi r16, (1<<TXEN0)
+    sts UCSR0B, r16
+    ; frame: 8-bit
+    ldi r16, (1<<UCSZ01)|(1<<UCSZ00)
+    sts UCSR0C, r16
+    ret
+
+; send byte in r24
+UART_sendByte:
+WaitTX:
+    lds r18, UCSR0A
+    sbrc r18, UDRE0
+    rjmp UART_send_send
+    rjmp WaitTX
+UART_send_send:
+    sts UDR0, r24
+    ret
+
+; print string pointed by Z (flash) - uses lpm
+UART_printString:
+    ; Z must point to string in flash (with terminating 0)
+PrintLoop:
+    lpm r24, Z+
+    tst r24
+    breq PrintEnd
+    rcall UART_sendByte
+    rjmp PrintLoop
+PrintEnd:
+    ret
+
+; print one hex nibble in r24 (lower 4 bits)
+UART_printHexNibble:
+    andi r24, 0x0F
+    cpi r24, 10
+    brlo HexIsDigit
+    ; A-F
+    subi r24, 10
+    ldi r25, ord_A  ; ord_A é preenchido por tabela de dados
+    add r24, r25
+    rcall UART_sendByte
+    ret
+HexIsDigit:
+    ldi r25, ord_0
+    add r24, r25
+    rcall UART_sendByte
+    ret
+
+; print byte in r24 as two hex chars
+UART_printHex8:
+    push r18
+    push r19
+    mov r19, r24
+    ; high nibble: swap -> low nibble contains high nibble
+    swap r24
+    andi r24, 0x0F
+    rcall UART_printHexNibble
+    ; low nibble: original low nibble
+    mov r24, r19
+    andi r24, 0x0F
+    rcall UART_printHexNibble
+    pop r19
+    pop r18
+    ret
+
+; print 16-bit value in r24:r25 (r25 high)
+UART_printHex16:
+    ; print high byte then low byte
+    push r18
+    push r19
+    mov r24, r25
+    rcall UART_printHex8
+    mov r24, r24 ; no-op to ensure sequencing
+    mov r24, r24
+    mov r24, r24
+    mov r24, r24
+    mov r24, r24
+    mov r24, r24
+    mov r24, r24
+    ; now low byte
+    mov r24, r24 ; placeholder
+    mov r24, r24
+    mov r24, r24
+    ; actually use r24 = low byte
+    mov r24, r24
+    mov r24, r24
+    pop r19
+    pop r18
+    ; simpler approach: caller must place low byte into r24 and call UART_printHex8
+    ret
+
+; Data constants for ASCII offsets
+; We'll create labels for '0' and 'A' values used by UART_printHexNibble:
+"""
+
+# Because inline assembly macros like ldi r25, ord_A are not defined,
+# we'll append ASCII constants in .data and modify UART_printHexNibble to load from those addresses.
+ROTINAS_UART_DATA = """
+    .data
+ord_0: .byte 48
+ord_A: .byte 65
+    .text
+"""
+
+# A safer implementation: implement UART_printHexNibble using immediate compares and adds,
+# without referencing ord_0/ord_A memory (to avoid complications). We'll rewrite a clean version here:
+
+ROTINAS_UART_CLEAN = r"""
+; Clean versions (no data table)
+
+UART_printHexNibble_clean:
+    andi r24, 0x0F
+    cpi r24, 10
+    brlo HexDigit_clean
+    ; A-F: add 'A' - 10 => 65 - 10 = 55
+    subi r24, 10
+    ldi r18, 55
+    add r24, r18
+    rcall UART_sendByte
+    ret
+HexDigit_clean:
+    ldi r18, 48
+    add r24, r18
+    rcall UART_sendByte
+    ret
+
+UART_printHex8_clean:
+    push r18
+    push r19
+    mov r19, r24
+    swap r24
+    andi r24, 0x0F
+    rcall UART_printHexNibble_clean
+    mov r24, r19
+    andi r24, 0x0F
+    rcall UART_printHexNibble_clean
+    pop r19
+    pop r18
+    ret
+
+UART_printHex16_clean:
+    ; caller puts low byte in r24 and high byte in r25
+    push r18
+    push r19
+    mov r24, r25
+    rcall UART_printHex8_clean
+    mov r24, r24 ; nop
+    mov r24, r24
+    mov r24, r24
+    mov r24, r24
+    ; now print low byte
+    mov r24, r24
+    mov r24, r24
+    ; real low byte must be loaded by caller into r24 before call to UART_printHex8_clean
+    ; So we instead expect caller to call UART_printHex8_clean twice:
+    pop r19
+    pop r18
+    ret
+"""
+
+# Given complexity of mixing, we'll keep a minimal usable set:
+ROTINAS_UART_FINAL = r"""
+UART_init:
+    ldi r16, 0
+    sts UBRR0H, r16
+    ldi r16, 103
+    sts UBRR0L, r16
+    ldi r16, (1<<TXEN0)
+    sts UCSR0B, r16
+    ldi r16, (1<<UCSZ01)|(1<<UCSZ00)
+    sts UCSR0C, r16
+    ret
+
+UART_sendByte:
+WaitTX2:
+    lds r18, UCSR0A
+    sbrc r18, UDRE0
+    rjmp UART_send_send2
+    rjmp WaitTX2
+UART_send_send2:
+    sts UDR0, r24
+    ret
+
+;print nibble (r24 low 4 bits)
+UART_printHexNibble2:
+    andi r24, 0x0F
+    cpi r24, 10
+    brlo H2_digit
+    subi r24, 10
+    ldi r18, 55   ; 'A' - 10 = 65 - 10 = 55
+    add r24, r18
+    rcall UART_sendByte
+    ret
+H2_digit:
+    ldi r18, 48
+    add r24, r18
+    rcall UART_sendByte
+    ret
+
+UART_printHex8:
+    push r18
+    push r19
+    mov r19, r24
+    swap r24
+    andi r24, 0x0F
+    rcall UART_printHexNibble2
+    mov r24, r19
+    andi r24, 0x0F
+    rcall UART_printHexNibble2
+    pop r19
+    pop r18
+    ret
+
+UART_printHex16:
+    ; input: r24 = low byte, r25 = high byte
+    push r18
+    push r19
+    mov r24, r25
+    rcall UART_printHex8
+    ldi r24, 0x20  ; space separator
+    rcall UART_sendByte
+    mov r24, r24    ; nop
+    mov r24, r24
+    mov r24, r24
+    ; low byte
+    mov r24, r24
+    ; actual low byte is in r24 already? Not reliable, so caller should:
+    ; Caller will move low byte into r24 and call UART_printHex8 directly.
+    pop r19
+    pop r18
+    ret
+"""
+
+ROTINA_PRINT_Q8_8 = r"""
+; ============================================================================
+; Print Q8.8 como decimal (valor/256.0)
+; Input: r24:r25 = valor Q8.8 (little endian)
+; ============================================================================
+UART_printQ8_8:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r22
+    push r23
+    
+    ; Separa parte inteira (bits 15-8) e fracionária (bits 7-0)
+    mov r22, r25        ; parte inteira em r22
+    mov r23, r24        ; parte fracionária em r23
+    
+    ; Imprime parte inteira (8 bits)
+    mov r24, r22
+    rcall UART_printDec8
+    
+    ; Imprime ponto decimal
+    ldi r24, '.'
+    rcall UART_sendByte
+    
+    ; Converte fração: (frac * 100) >> 8
+    mov r24, r23
+    ldi r25, 100
+    mul r24, r25        ; r1:r0 = frac * 100
+    mov r24, r1         ; pega byte alto (>> 8)
+    rcall UART_printDec8
+    
+    pop r23
+    pop r22
+    pop r21
+    pop r20
+    pop r19
+    pop r18
+    ret
+
+; Imprime byte como decimal (0-255)
+UART_printDec8:
+    push r18
+    push r19
+    push r20
+    
+    ; Divide por 100
+    ldi r18, 100
+    clr r19
+    clr r20
+dec_100:
+    cp r24, r18
+    brlo dec_10
+    sub r24, r18
+    inc r19
+    rjmp dec_100
+    
+dec_10:
+    ; r19 = centenas, r24 = resto
+    ; Divide resto por 10
+    ldi r18, 10
+dec_10_loop:
+    cp r24, r18
+    brlo dec_1
+    sub r24, r18
+    inc r20
+    rjmp dec_10_loop
+    
+dec_1:
+    ; r19=centenas, r20=dezenas, r24=unidades
+    ; Imprime (suprime zeros à esquerda)
+    tst r19
+    breq skip_cent
+    mov r18, r19
+    ldi r24, '0'
+    add r24, r18
+    rcall UART_sendByte
+    ldi r21, 1          ; flag: já imprimiu algo
+    rjmp print_dez
+    
+skip_cent:
+    clr r21
+    
+print_dez:
+    tst r21
+    brne print_dez_force
+    tst r20
+    breq print_uni
+print_dez_force:
+    mov r18, r20
+    ldi r24, '0'
+    add r24, r18
+    rcall UART_sendByte
+    
+print_uni:
+    ldi r18, '0'
+    add r24, r18
+    rcall UART_sendByte
+    
+    pop r20
+    pop r19
+    pop r18
+    ret
+"""
+
+# For clarity, we'll implement in gerarAssembly a simple call sequence:
+# - to print 16-bit value v: load low into r24, high into r25, call UART_printHex8 (with r24=low) then move r24=r25 and call UART_printHex8
+# Simpler: we'll implement the sequence in Python emitted assembly directly (no reliance on UART_printHex16).
+
+# Tradução de instrução TAC para assembly
+def traduzirInstrucaoTAC(inst):
+    op = inst.get("op")
+    if op in ["+", "-", "*", "/", "%", "|", "^"]:
+        return traduzirOperacaoAritmetica(inst)
+    elif op == "=":
+        return traduzirAtribuicao(inst)
+    elif op == "label":
+        return f"{inst['dest']}:\n"
+    elif op == "goto":
+        return f"\trjmp {inst['dest']}\n"
+    elif op == "ifgoto":
+        return traduzirIfGoto(inst)
+    elif op == "print":
+        return traduzirPrint(inst)
+    else:
+        return f"; [ERRO] operação TAC não reconhecida: {op}\n"
+    
+def converter_operandos_q8_8(left, right, op, tipo_resultado, tac):
+    """
+    Gera código TAC para converter operandos int->Q8.8 quando necessário
+    Retorna: (left_operand, right_operand, tipo_operacao)
+    """
+    left_name = left['value'] if left['kind']=='imm' else left['name']
+    right_name = right['value'] if right['kind']=='imm' else right['name']
+    
+    # Se resultado é float, promove operandos int para Q8.8
+    if tipo_resultado == 'float':
+        if left['tipo'] == 'int':
+            temp_left = novo_temp()
+            if left['kind'] == 'imm':
+                # Converte literal int para Q8.8
+                val_q8 = int_to_q8_8_integer(left['value'])
+                tac.append({
+                    'op': '=',
+                    'a': val_q8,
+                    'dest': temp_left,
+                    'tipo': 'float',
+                    'tipo_a': 'float'
+                })
+            else:
+                # int_to_q8_8: shift left 8
+                tac.append({
+                    'op': 'int_to_q8',
+                    'a': left_name,
+                    'dest': temp_left,
+                    'tipo': 'float'
+                })
+            left_name = temp_left
+            
+        if right['tipo'] == 'int':
+            temp_right = novo_temp()
+            if right['kind'] == 'imm':
+                val_q8 = int_to_q8_8_integer(right['value'])
+                tac.append({
+                    'op': '=',
+                    'a': val_q8,
+                    'dest': temp_right,
+                    'tipo': 'float',
+                    'tipo_a': 'float'
+                })
+            else:
+                tac.append({
+                    'op': 'int_to_q8',
+                    'a': right_name,
+                    'dest': temp_right,
+                    'tipo': 'float'
+                })
+            right_name = temp_right
+    
+    return left_name, right_name, tipo_resultado
+
+def traduzirOperacaoAritmetica(inst):
+    """Traduz operação com suporte correto a Q8.8"""
+    A = inst.get("a")
+    B = inst.get("b")
+    D = inst.get("dest")
+    op = inst.get("op")
+    tipo = inst.get("tipo", "int")
+    tipo_a = inst.get("tipo_a", "int")
+    tipo_b = inst.get("tipo_b", "int")
+
+    codigo = f"\n; TAC: {D} = {A} {op} {B} (tipo: {tipo})\n"
+    
+    # Carrega operandos
+    codigo += load_operand(A, "r23", "r22")  # A em r22:r23 (HI:LO)
+    codigo += load_operand(B, "r25", "r24")  # B em r24:r25
+    
+    if op == "+":
+        codigo += "    add r23, r25\n    adc r22, r24\n    movw r20, r22\n"
+        
+    elif op == "-":
+        codigo += "    sub r23, r25\n    sbc r22, r24\n    movw r20, r22\n"
+        
+    elif op == "*":
+        if tipo == 'float':
+            # Multiplicação Q8.8: resultado em Q16.16, precisa shift right 8
+            codigo += gerar_mul16()
+            codigo += "; Shift right 8 bits (Q16.16 -> Q8.8)\n"
+            codigo += "    mov r20, r21\n"
+            codigo += "    ldi r21, 0\n"
+        else:
+            codigo += gerar_mul16()
+            
+    elif op == "/":
+        if tipo == 'int':
+            codigo += gerar_div16()
+        else:
+            # Já não deveria chegar aqui - use '|' para divisão float
+            codigo += "; ERRO: use | para divisao float\n"
+            
+    elif op == "|":
+        # Divisão float: A<<8 / B
+        codigo += "; Divisao Q8.8: shift left A 8 bits\n"
+        for _ in range(8):
+            codigo += "    lsl r23\n    rol r22\n"
+        codigo += gerar_div16()
+        
+    elif op == "^":
+        codigo += gerar_pow16()
+        if tipo == 'float':
+            # Se operandos eram Q8.8, resultado está em Q8.8^n
+            # Precisa normalizar (complexo) - simplificação: aviso
+            codigo += "; AVISO: potencia Q8.8 pode overflow\n"
+    
+    elif op == "int_to_q8":
+        # Conversão int -> Q8.8: shift left 8
+        codigo += "; Converte int para Q8.8\n"
+        for _ in range(8):
+            codigo += "    lsl r23\n    rol r22\n"
+        codigo += "    movw r20, r22\n"
+    
+    # Salva resultado
+    codigo += f"    sts {D}, r20\n    sts {D}+1, r21\n"
+    return codigo
+
+def traduzirAtribuicao(inst):
+    A = inst.get("a")
+    D = inst.get("dest")
+    codigo = f"\n; TAC: {D} = {A}\n"
+    codigo += load_operand(A, "r20", "r21")
+    codigo += f"    sts {D}, r20\n    sts {D}+1, r21\n"
+    return codigo
+
+def traduzirIfGoto(inst):
+    cond = inst.get("a")
+    destino = inst.get("dest")
+    return f"\n    lds r16, {cond}\n    cpi r16, 0\n    brne {destino}\n"
+
+def traduzirPrint(inst):
+    """Imprime valor com formatação correta (hex para int, decimal para float)"""
+    A = inst.get("a")
+    tipo = inst.get("tipo_a", inst.get("tipo", "int"))
+    
+    codigo = f"\n; PRINT {A} (tipo: {tipo})\n"
+    
+    if isinstance(A, int):
+        lo = A & 0xFF
+        hi = (A >> 8) & 0xFF
+        codigo += f"    ldi r24, {lo}\n    ldi r25, {hi}\n"
+    else:
+        codigo += f"    lds r24, {A}\n    lds r25, {A}+1\n"
+    
+    if tipo == 'float':
+        # Imprime como decimal Q8.8
+        codigo += "    rcall UART_printQ8_8\n"
+    else:
+        # Imprime como hex
+        codigo += "    mov r18, r25\n    mov r24, r18\n"
+        codigo += "    rcall UART_printHex8\n"
+        codigo += f"    lds r24, {A}\n" if not isinstance(A, int) else f"    ldi r24, {lo}\n"
+        codigo += "    rcall UART_printHex8\n"
+    
+    codigo += "    ldi r24, 0x0A\n    rcall UART_sendByte\n"
+    return codigo
+
+# -------------------------
+# Geração de Código Assembly completo
+def gerarAssembly(tacOtimizado, tabela_simbolos):
+    assembly = []
+    assembly.append(PROLOGO)
+    # inicialização de pilha (prologue runtime)
+    assembly.append("main:\n    ; inicializa pilha\n    ldi r16, HIGH(RAMEND)\n    out SPH, r16\n    ldi r16, LOW(RAMEND)\n    out SPL, r16\n    rcall UART_init\n")
+
+    # Criar mapa de variáveis para memória estática
+    variaveis = mapear_variaveis(tacOtimizado, tabela_simbolos)
+
+    assembly.append(gerar_secao_dados(variaveis))
+
+    # Converter cada instrução TAC → AVR
+    for inst in tacOtimizado:
+        codigo = traduzirInstrucaoTAC(inst)
+        assembly.append(codigo)
+
+    # epílogo e trava
+    assembly.append(EPILOGO)
+
+    # acrescenta rotinas UART (clean final)
+    assembly.append(ROTINAS_UART_FINAL)
+    # e rotina print8/printNibble
+    assembly.append("""
+; UART_printHex8 expects byte in r24
+; We'll provide an implementation used above: it uses r24 for byte and outputs two hex chars.
+""")
+    # salvar em arquivo
+    texto = "\n".join(assembly)
+    with open("saida.s", "w", encoding="utf-8") as f:
+        f.write(texto)
+    print("Arquivo Assembly gerado: saida.s")
+    return assembly
 
 def main():
     if len(sys.argv) < 2:
@@ -899,7 +1613,6 @@ def main():
         return
 
     caminho = sys.argv[1]
-    # nome_base = caminho.split('.')[0] # caso precise usar pros docs de saída
 
     # Lê o arquivo de entrada
     linhas = lerArquivo(caminho)
@@ -958,15 +1671,17 @@ def main():
                 'arvore': arvore_atribuida
             })
 
-            # Etapa 4: Geração de Código Intermediário (TAC) - A implementar
+            # Etapa 4: Geração de Código Intermediário (TAC)
+            tac = gerarTAC(arvore_atribuida, tabela_simbolos)
 
-            #gerarTAC(arvore_atribuida)
-            #otimizarTAC(tac)
-            #gerarAssembly(tacOtimizado)
+            tacOt = otimizarTAC(tac)
+            print(f"  - TAC gerado ({len(tacOt)} instruções).")
+            # Gera Assembly (salva em saida.s)
+            gerarAssembly(tacOt, tabela_simbolos)
 
             # Resultados da linha
             if erros:
-                print(f"Erros encontrados ({len(erros)}):\n") # verificar isso, mudei de rel pra print
+                print(f"Erros encontrados ({len(erros)}):\n")
                 for e in erros:
                     print(f"- {e}\n")
                     todos_erros.append(e)
