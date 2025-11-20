@@ -9,9 +9,11 @@ import math
 
 EPS = 'E'
 
-# -------------------------
-# Função para ler arquivo linha por linha
 def lerArquivo(nomeArquivo):
+    """
+    Lê um arquivo linha por linha, removendo espaços extras e ignorando linhas vazias.
+    Retorna uma lista de strings ou None em caso de erro.
+    """
     linhas = []
     try:
         with open(nomeArquivo, 'r', encoding='utf-8') as file:
@@ -29,60 +31,84 @@ def lerArquivo(nomeArquivo):
 
 ## FASE 1: ANÁLISE LÉXICA
 
-# -------------------------
-# Função para separar tokens em uma linha
 def parseExpressao(linha, _tokens_):
     token = ""
     parenteses = 0
     i = 0
+
     while i < len(linha):
         char = linha[i]
+
+        # Separação por espaço
         if char.isspace():
             if token:
                 _tokens_.append(token)
                 token = ""
+
+        # Parênteses são tokens individuais
         elif char in "()":
             if token:
                 _tokens_.append(token)
                 token = ""
             _tokens_.append(char)
+
+            # Atualiza contagem de parênteses para verificação posterior
             if char == "(":
                 parenteses += 1
             else:
                 parenteses -= 1
                 if parenteses < 0:
+                    # Fecha mais do que abre → erro
                     raise ValueError("Erro Sintático: parêntese fechado sem correspondente.")
+
+        # Operadores aritméticos simples
         elif char in "+-*/%^":
             if token:
                 _tokens_.append(token)
                 token = ""
             _tokens_.append(char)
+
+        # Operador especial "|" (divisão float)
         elif char == '|':
             if token:
                 _tokens_.append(token)
                 token = ""
             _tokens_.append(char)
+
+        # Operadores relacionais (<, <=, >, >=, ==, !=)
         elif char in "><=!":
             if token:
                 _tokens_.append(token)
                 token = ""
+
+            # Verifica se operador é composto (ex.: >=)
             if i + 1 < len(linha) and linha[i + 1] == '=':
                 _tokens_.append(char + '=')
                 i += 1
             else:
                 _tokens_.append(char)
+
+        # Acumula caracteres de identificadores ou números
         else:
             token += char
+
         i += 1
+
+    # Último token pendente
     if token:
         _tokens_.append(token)
+
+    # Checa se parênteses estão balanceados
     if parenteses != 0:
         raise ValueError("Erro Sintático: parêntese aberto sem correspondente.")
+
     return True
 
-# -------------------------
-# Funções de estado para o analisador léxico
 def estadoNumero(token):
+    """
+    Determina se um token representa um número inteiro ou real válido.
+    Aceita inteiros ou floats com apenas um ponto.
+    """
     if not token:
         return False
 
@@ -99,12 +125,15 @@ def estadoNumero(token):
         return False
 
 def estadoOperador(token):
+    """Retorna True se o token é um operador aritmético simples."""
     return token in ["+", "-", "*", "|", "/", "%", "^"]
 
 def estadoParenteses(token):
+    """Verifica se o token é '(' ou ')'."""
     return token in ["(", ")"]
 
 def estadoComparador(token):
+    """Verifica se o token é um operador relacional válido."""
     return token in ["<", ">", "<=", ">=", "==", "!="]
 
 def RESorMEM(token):
@@ -122,25 +151,80 @@ def RESorMEM(token):
                 return False
     return estado == "QID"
 
-# -------------------------
-# Analisador léxico
-def analisadorLexico(tokens_originais):
-    tokens_convertidos = []
-    tokens_valores = []
-    
+def RESorMEM(token: str) -> bool:
+    """
+    Verifica se o token representa um identificador válido no padrão da linguagem.
+    A regra implementada é:
+      - Primeiro caractere: letra maiúscula
+      - Demais caracteres: letras maiúsculas ou dígitos
+
+    Essa função simula um autômato finito:
+      Q0  → espera primeira letra
+      QID → aceita sequência de letras maiúsculas e dígitos
+    """
+    if not token:
+        return False
+
+    estado = "Q0"
+
+    for ch in token:
+        if estado == "Q0":
+            if ch.isalpha() and ch.isupper():
+                estado = "QID"
+            else:
+                return False
+
+        elif estado == "QID":
+            # Só permite letras maiúsculas ou dígitos
+            if not (ch.isalpha() and ch.isupper()) and not ch.isdigit():
+                return False
+
+    return estado == "QID"
+
+def analisadorLexico(tokens_originais: list[str]) -> tuple[list[str], list]:
+    """
+    Converte uma lista de tokens brutos (strings extraídas do código)
+    para:
+
+        - tokens_convertidos: tipos ou classes de tokens 
+            ('int', 'float', 'if', 'ident', '+', '(', ...)
+
+        - tokens_valores: valores concretos
+            (ex: número convertido para int/float, identificadores mantidos)
+
+    Essa função identifica:
+        - Parênteses
+        - Operadores aritméticos
+        - Operadores relacionais
+        - Tipos numéricos
+        - Palavras reservadas (RES, IF, WHILE)
+        - Identificadores válidos definidos por RESorMEM()
+    """
+
+    tokens_convertidos: list[str] = []
+    tokens_valores: list = []
+
     for token in tokens_originais:
+
+        # Parênteses
         if estadoParenteses(token):
             tokens_convertidos.append(token)
             tokens_valores.append(token)
             continue
+
+        # Operadores aritméticos
         if estadoOperador(token):
             tokens_convertidos.append(token)
             tokens_valores.append(token)
             continue
+
+        # Operadores relacionais
         if estadoComparador(token):
             tokens_convertidos.append(token)
             tokens_valores.append(token)
             continue
+
+        # Números (inteiros ou reais)
         if estadoNumero(token):
             if token.count(".") == 1:
                 tokens_convertidos.append("float")
@@ -149,79 +233,136 @@ def analisadorLexico(tokens_originais):
                 tokens_convertidos.append("int")
                 tokens_valores.append(int(token))
             continue
+
+        # Palavras-chave e identificadores
         if RESorMEM(token):
             if token == "RES":
                 tokens_convertidos.append("res")
                 tokens_valores.append(token)
+
             elif token == "IF":
                 tokens_convertidos.append("if")
                 tokens_valores.append(token)
+
             elif token == "WHILE":
                 tokens_convertidos.append("while")
                 tokens_valores.append(token)
+
             else:
+                # Identificador válido
                 tokens_convertidos.append("ident")
                 tokens_valores.append(token)
+
             continue
+
+        # Se nada corresponde → erro léxico
         raise ValueError(f"Erro Léxico: token inválido -> {token}")
-    
+
     return tokens_convertidos, tokens_valores
 
 ## FASE 2: ANÁLISE SINTÁTICA
 
-# -------------------------
-# Analisador sintático
-def analisadorSintatico(tokens, tabelaLL1):
-    stack = ['$', 'LINHA']
-    derivation = []
+def analisadorSintatico(tokens: list[str], tabelaLL1: dict) -> list[tuple[str, list[str]]]:
+    """
+    Implementa um analisador sintático LL(1) clássico usando pilha.
+
+    Parâmetros:
+        tokens      - lista de tokens já classificados pelo léxico (strings)
+        tabelaLL1   - dicionário {(nao-terminal, terminal): produção}
+
+    Retorna:
+        derivation - lista de produções aplicadas durante a análise, no formato (A, produção)
+
+    Lógica geral:
+        - A pilha inicia com o símbolo inicial 'LINHA' e o símbolo de fim '$'
+        - A cada passo, compara topo da pilha com o token atual
+        - Se for terminal, deve casar exatamente
+        - Se for não-terminal, consulta a tabela LL(1)
+        - Substitui produção na pilha (em ordem reversa)
+        - Caso não haja produção compatível → erro sintático
+    """
+
+    stack: list[str] = ['$', 'LINHA']
+    derivation: list[tuple[str, list[str]]] = []
     index = 0
+
+    # Conjunto de não-terminais (chaves da tabela)
     nonterminals = {A for (A, _) in tabelaLL1.keys()}
 
-    def is_nonterminal(sym):
+    def is_nonterminal(sym: str) -> bool:
         return sym in nonterminals
 
     while stack:
         top = stack.pop()
-        if index < len(tokens):
-            current_token = tokens[index]
-        else:
-            current_token = '$'
-        
+
+        # Token atual ou símbolo de fim
+        current_token = tokens[index] if index < len(tokens) else '$'
+
+        # Caso aceitação total
         if top == current_token == '$':
             return derivation
-        
+
+        # Caso seja terminal
         if not is_nonterminal(top):
             if top == current_token:
                 index += 1
             else:
                 raise ValueError(f"Erro Sintático: esperado '{top}', encontrado '{current_token}'")
+
+        # Caso seja não-terminal
         else:
             key = (top, current_token)
+
             if key in tabelaLL1:
-                production = tabelaLL1[key]
+                production: list[str] = tabelaLL1[key]
+
                 derivation.append((top, production))
+
+                # Empilha a produção em ordem reversa
                 for sym in reversed(production):
                     if sym != EPS:
                         stack.append(sym)
             else:
                 raise ValueError(f"Erro Sintático: não há produção para {top}, '{current_token}'")
-    
+
     raise ValueError("Erro Sintático: pilha vazia antes do fim dos tokens")
 
 ## FASE 3: ANÁLISE SEMÂNTICA
 
-# -------------------------
-# Funções auxiliares para Tabela de Símbolos
-def inicializarTabelaSimbolos():
+def inicializarTabelaSimbolos() -> dict:
+    """
+    Cria e retorna uma nova tabela de símbolos vazia.
+    A tabela é representada como um dicionário cuja chave é o nome do símbolo
+    e o valor é outro dicionário contendo atributos (tipo, valor, escopo etc.).
+    """
     return {}
 
-def adicionarSimbolo(tabela, nome, tipo='desconhecido', inicializada=False, valor=None, linha=0, escopo='global'):
+def adicionarSimbolo(tabela: dict, nome: str, tipo: str = 'desconhecido', inicializada: bool = False,
+    valor=None, linha: int = 0, escopo: str = 'global' ) -> dict:
+    """
+    Insere ou atualiza um símbolo na tabela de símbolos.
+
+    - Se o símbolo já existe, atualiza seus campos quando apropriado.
+    - Se não existe, cria uma nova entrada completa.
+
+    Parâmetros:
+        tabela        - tabela de símbolos onde o símbolo será inserido
+        nome          - nome do identificador
+      tipo          – tipo do símbolo (int, float, booleano, ...)
+        inicializada  - se já recebeu valor
+        valor         - valor literal (se conhecido)
+        linha         - linha onde foi declarado
+        escopo        - escopo atual (global ou algum bloco interno)
+    """
     if nome in tabela:
         tabela[nome]['tipo'] = tipo
         tabela[nome]['inicializada'] = inicializada
         tabela[nome]['valor'] = valor
+
+        # Insere linha de declaração apenas se ainda não existir
         if not tabela[nome].get('linha_declaracao'):
             tabela[nome]['linha_declaracao'] = linha
+
     else:
         tabela[nome] = {
             'tipo': tipo,
@@ -230,34 +371,62 @@ def adicionarSimbolo(tabela, nome, tipo='desconhecido', inicializada=False, valo
             'linha_declaracao': linha,
             'escopo': escopo,
             'usada': False,
-            'linhas_uso': [] # Lista para rastrear linhas onde o símbolo é usado
+            'linhas_uso': []  # Registra todas as linhas em que o símbolo foi referenciado
         }
+
     return tabela
 
-def buscarSimbolo(tabela, nome):
+def buscarSimbolo(tabela: dict, nome: str):
+    """
+    Retorna o símbolo correspondente ao nome, ou None caso não exista.
+    """
     return tabela.get(nome, None)
 
-def marcarSimboloUsado(tabela, nome, linha):
+def marcarSimboloUsado(tabela: dict, nome: str, linha: int) -> None:
+    """
+    Marca que um símbolo foi utilizado em uma linha específica.
+    Isso é útil para avisar quando variáveis são declaradas mas nunca usadas.
+    """
     if nome in tabela:
         tabela[nome]['usada'] = True
+
         if 'linhas_uso' not in tabela[nome]:
             tabela[nome]['linhas_uso'] = []
+
         if linha not in tabela[nome]['linhas_uso']:
             tabela[nome]['linhas_uso'].append(linha)
 
-# -------------------------
-# Definição da Gramática de Atributos
-def definirGramaticaAtributos():
+def definirGramaticaAtributos() -> dict:
+    """
+    Define todas as regras semânticas da linguagem.
+    As regras são divididas em categorias semânticas:
+        - operadores aritméticos
+      - operadores relacionais
+      - estruturas de controle
+      - comandos especiais (RES, MEM, etc.)
+
+    Cada operador contém:
+      - quais tipos aceita
+      - qual tipo retorna
+      - regras especiais (ex.: promoção de tipo)
+
+    Retorna um dicionário contendo todas as regras.
+    """
     regras_semanticas = {
         'operadores_aritmeticos': {
             '+': {'aceita': ['int', 'float'], 'retorna': 'promover'},
             '-': {'aceita': ['int', 'float'], 'retorna': 'promover'},
             '*': {'aceita': ['int', 'float'], 'retorna': 'promover'},
-            '|': {'aceita': ['int', 'float'], 'retorna': 'float'},
-            '/': {'aceita': ['int'], 'retorna': 'int'},
+            '|': {'aceita': ['int', 'float'], 'retorna': 'float'},  # divisão float
+            '/': {'aceita': ['int'], 'retorna': 'int'},             # divisão inteira
             '%': {'aceita': ['int'], 'retorna': 'int'},
-            '^': {'aceita_base': ['int', 'float'], 'aceita_exp': ['int'], 'retorna': 'promover'}
+            '^': {  # exponenciação
+                'aceita_base': ['int', 'float'],
+                'aceita_exp': ['int'],
+                'retorna': 'promover'
+            }
         },
+
         'operadores_relacionais': {
             '<': {'aceita': ['int', 'float'], 'retorna': 'booleano'},
             '>': {'aceita': ['int', 'float'], 'retorna': 'booleano'},
@@ -266,206 +435,333 @@ def definirGramaticaAtributos():
             '==': {'aceita': ['int', 'float'], 'retorna': 'booleano'},
             '!=': {'aceita': ['int', 'float'], 'retorna': 'booleano'}
         },
+
         'estruturas_controle': {
             'if': {'condicao': 'booleano', 'retorna': 'tipo_ramos'},
             'while': {'condicao': 'booleano', 'retorna': 'tipo_corpo'}
         },
+
         'comandos_especiais': {
             'res': {'parametro': 'int', 'retorna': 'tipo_resultado'},
             'mem_atrib': {'valor': ['int', 'float'], 'retorna': 'tipo_valor'},
             'mem_leitura': {'retorna': 'tipo_memoria'}
         }
     }
+
     return regras_semanticas
 
-def promoverTipo(tipo1, tipo2):
+def promoverTipo(tipo1: str, tipo2: str) -> str:
+    """
+    Aplica a regra de promoção de tipos.
+    A promoção ocorre quando a operação precisa elevar o tipo do resultado,
+    por exemplo: int + float → float.
+
+    Regras:
+        - Se qualquer operando é float → resultado é float
+        - Se ambos são int → resultado é int
+        - Se qualquer é booleano → resultado é booleano
+        - Caso contrário → desconhecido
+    """
     if tipo1 == 'float' or tipo2 == 'float':
         return 'float'
+
     if tipo1 == 'int' and tipo2 == 'int':
         return 'int'
+
     if tipo1 == 'booleano' or tipo2 == 'booleano':
         return 'booleano'
+
     return 'desconhecido'
 
-# -------------------------
-# Construção da gramática LL(1)
-def construirGramatica():
-    def is_nonterminal(sym, G):
-        return sym in G
+def construirGramatica() -> tuple:
+    """
+    Constrói a gramática LL(1), seus conjuntos FIRST, FOLLOW e a tabela LL(1).
+    Também realiza detecção de conflitos que invalidam a gramática.
 
-    def calcularFirst(G):
+    Retorna:
+        (G, FIRST, FOLLOW, tabelaLL1):
+            G (dict): gramática no formato {NaoTerminal: [produções]}
+            FIRST (dict): conjunto FIRST para cada não terminal
+            FOLLOW (dict): conjunto FOLLOW para cada não terminal
+            tabelaLL1 (dict): tabela LL(1) no formato {(A, a): produção}
+    """
+
+    # --------------------------------------------------------
+    # Funções internas
+    # --------------------------------------------------------
+
+    def is_nonterminal(simbolo: str, G: dict) -> bool:
+        """Retorna True se um símbolo é não-terminal da gramática."""
+        return simbolo in G
+
+    def calcularFirst(G: dict) -> dict:
+        """
+        Calcula FIRST para cada não terminal da gramática.
+        Implementação clássica iterativa.
+
+        Retorna:
+            dict: FIRST[A] = conjunto de símbolos terminais ou ε
+        """
         FIRST = {A: set() for A in G}
-        changed = True
-        while changed:
-            changed = False
+        alterou = True
+
+        while alterou:
+            alterou = False
             for A in G:
-                for prod in G[A]:
-                    if len(prod) == 0:
+                for producao in G[A]:
+
+                    # Produção vazia
+                    if len(producao) == 0:
                         if EPS not in FIRST[A]:
                             FIRST[A].add(EPS)
-                            changed = True
+                            alterou = True
                         continue
-                    add_epsilon = True
-                    for sym in prod:
-                        if sym == EPS:
+
+                    pode_gerar_epsilon = True
+
+                    for simbolo in producao:
+
+                        # Símbolo é ε
+                        if simbolo == EPS:
                             if EPS not in FIRST[A]:
                                 FIRST[A].add(EPS)
-                                changed = True
-                            add_epsilon = False
+                                alterou = True
+                            pode_gerar_epsilon = False
                             break
-                        if not is_nonterminal(sym, G):
-                            if sym not in FIRST[A]:
-                                FIRST[A].add(sym)
-                                changed = True
-                            add_epsilon = False
+
+                        # Terminal
+                        if not is_nonterminal(simbolo, G):
+                            if simbolo not in FIRST[A]:
+                                FIRST[A].add(simbolo)
+                                alterou = True
+                            pode_gerar_epsilon = False
                             break
+
+                        # Não-terminal
+                        tamanho_antes = len(FIRST[A])
+                        FIRST[A].update(s for s in FIRST[simbolo] if s != EPS)
+
+                        if len(FIRST[A]) != tamanho_antes:
+                            alterou = True
+
+                        if EPS in FIRST[simbolo]:
+                            pode_gerar_epsilon = True
                         else:
-                            before = len(FIRST[A])
-                            FIRST[A].update(x for x in FIRST[sym] if x != EPS)
-                            if len(FIRST[A]) != before:
-                                changed = True
-                            if EPS in FIRST[sym]:
-                                add_epsilon = True
-                            else:
-                                add_epsilon = False
-                                break
-                    if add_epsilon:
+                            pode_gerar_epsilon = False
+                            break
+
+                    if pode_gerar_epsilon:
                         if EPS not in FIRST[A]:
                             FIRST[A].add(EPS)
-                            changed = True
+                            alterou = True
+
         return FIRST
 
-    def first_of_sequence(seq, FIRST, G):
-        result = set()
-        if len(seq) == 0:
-            result.add(EPS)
-            return result
-        add_epsilon = True
-        for sym in seq:
-            if sym == EPS:
-                result.add(EPS)
-                add_epsilon = False
-                break
-            if not is_nonterminal(sym, G):
-                result.add(sym)
-                add_epsilon = False
-                break
-            else:
-                result.update(x for x in FIRST[sym] if x != EPS)
-                if EPS in FIRST[sym]:
-                    add_epsilon = True
-                else:
-                    add_epsilon = False
-                    break
-        if add_epsilon:
-            result.add(EPS)
-        return result
+    def first_of_sequence(seq: list, FIRST: dict, G: dict) -> set:
+        """
+        Calcula FIRST de uma sequência de símbolos.
 
-    def calcularFollow(G, FIRST, start='LINHA'):
+        Retorna:
+            set: conjunto FIRST( seq )
+        """
+        resultado = set()
+
+        if len(seq) == 0:
+            resultado.add(EPS)
+            return resultado
+
+        pode_gerar_epsilon = True
+
+        for simbolo in seq:
+
+            if simbolo == EPS:
+                resultado.add(EPS)
+                pode_gerar_epsilon = False
+                break
+
+            if not is_nonterminal(simbolo, G):
+                resultado.add(simbolo)
+                pode_gerar_epsilon = False
+                break
+
+            resultado.update(s for s in FIRST[simbolo] if s != EPS)
+
+            if EPS in FIRST[simbolo]:
+                pode_gerar_epsilon = True
+            else:
+                pode_gerar_epsilon = False
+                break
+
+        if pode_gerar_epsilon:
+            resultado.add(EPS)
+
+        return resultado
+
+    def calcularFollow(G: dict, FIRST: dict, start: str = 'LINHA') -> dict:
+        """
+        Calcula FOLLOW de cada não terminal da gramática.
+
+        Args:
+            G: gramática
+            FIRST: conjuntos FIRST
+            start: símbolo inicial
+
+        Retorna:
+            dict: FOLLOW[A]
+        """
         FOLLOW = {A: set() for A in G}
         FOLLOW[start].add('$')
-        changed = True
-        while changed:
-            changed = False
+
+        alterou = True
+
+        while alterou:
+            alterou = False
+
             for A in G:
-                for prod in G[A]:
-                    for i, B in enumerate(prod):
+                for producao in G[A]:
+                    for i, B in enumerate(producao):
+
                         if not is_nonterminal(B, G):
                             continue
-                        beta = prod[i+1:]
+
+                        beta = producao[i + 1:]
                         first_beta = first_of_sequence(beta, FIRST, G)
-                        before = len(FOLLOW[B])
-                        FOLLOW[B].update(x for x in first_beta if x != EPS)
+
+                        tamanho_antes = len(FOLLOW[B])
+                        FOLLOW[B].update(s for s in first_beta if s != EPS)
+
                         if EPS in first_beta or len(beta) == 0:
                             FOLLOW[B].update(FOLLOW[A])
-                        if len(FOLLOW[B]) != before:
-                            changed = True
+
+                        if len(FOLLOW[B]) != tamanho_antes:
+                            alterou = True
+
         return FOLLOW
 
-    def construirTabelaLL1(G, FIRST, FOLLOW):
-        table = {}
-        conflicts = []
+    def construirTabelaLL1(G: dict, FIRST: dict, FOLLOW: dict) -> tuple:
+        """
+        Constrói a tabela LL(1) no formato:
+            tabela[(NaoTerminal, Terminal)] = produção
+
+        Detecta conflitos de entrada múltipla.
+
+        Retorna:
+            (tabela, conflitos)
+        """
+        tabela = {}
+        conflitos = []
+
         for A in G:
-            for prod in G[A]:
-                first_prod = first_of_sequence(prod, FIRST, G)
+            for producao in G[A]:
+
+                first_prod = first_of_sequence(producao, FIRST, G)
+
+                # FIRST sem ε
                 for a in (first_prod - {EPS}):
-                    key = (A, a)
-                    if key in table and table[key] != prod:
-                        conflicts.append((key, table[key], prod))
+                    chave = (A, a)
+
+                    if chave in tabela and tabela[chave] != producao:
+                        conflitos.append((chave, tabela[chave], producao))
                     else:
-                        table[key] = prod
+                        tabela[chave] = producao
+
+                # Caso tenha ε, propaga para FOLLOW
                 if EPS in first_prod:
                     for b in FOLLOW[A]:
-                        key = (A, b)
-                        if key in table and table[key] != prod:
-                            conflicts.append((key, table[key], prod))
+                        chave = (A, b)
+
+                        if chave in tabela and tabela[chave] != producao:
+                            conflitos.append((chave, tabela[chave], producao))
                         else:
-                            table[key] = prod
-        return table, conflicts
+                            tabela[chave] = producao
 
-    G = {}
-    G['LINHA'] = [['EXPR']]
-    G['EXPR'] = [['(', 'ITEMS', ')']]
-    G['ITEMS'] = [['ITEM', 'ITEMS'], [EPS]]
-    G['ITEM'] = [['NUMERO'], ['IDENT'], ['OPERADOR'], ['IFKW'], ['WHILEKW'], ['EXPR']]
-    G['NUMERO'] = [['float'], ['int']]
-    G['IDENT'] = [['ident'], ['res']]
-    G['OPERADOR'] = [['+'], ['-'], ['*'], ['/'], ['%'], ['^'], ['|'], 
-                     ['>'], ['<'], ['>='], ['<='], ['=='], ['!=']]
-    G['IFKW'] = [['if']]
-    G['WHILEKW'] = [['while']]
+        return tabela, conflitos
 
+    # --------------------------------------------------------
+    # Definição formal da gramática
+    # --------------------------------------------------------
+
+    G = {
+        'LINHA': [['EXPR']],
+        'EXPR': [['(', 'ITEMS', ')']],
+        'ITEMS': [['ITEM', 'ITEMS'], [EPS]],
+        'ITEM': [['NUMERO'], ['IDENT'], ['OPERADOR'], ['IFKW'], ['WHILEKW'], ['EXPR']],
+        'NUMERO': [['float'], ['int']],
+        'IDENT': [['ident'], ['res']],
+        'OPERADOR': [
+            ['+'], ['-'], ['*'], ['/'], ['%'], ['^'], ['|'],
+            ['>'], ['<'], ['>='], ['<='], ['=='], ['!=']
+        ],
+        'IFKW': [['if']],
+        'WHILEKW': [['while']]
+    }
+
+    # FIRST, FOLLOW e tabela LL(1)
     FIRST = calcularFirst(G)
-    FOLLOW = calcularFollow(G, FIRST, start='LINHA')
+    FOLLOW = calcularFollow(G, FIRST)
     tabelaLL1, conflitos = construirTabelaLL1(G, FIRST, FOLLOW)
 
     if conflitos:
-        print("Conflitos encontrados na tabela LL(1):")
-        for (A, a), prod1, prod2 in conflitos:
-            print(f"  Não determinismo para ({A}, {a}): {prod1} e {prod2}")
-        raise ValueError("Gramática não é LL(1) devido a conflitos na tabela.")
-    
+        for (A, a), p1, p2 in conflitos:
+            print(f"Conflito LL(1) em ({A}, {a}): {p1} / {p2}")
+        raise ValueError("Gramática não é LL(1).")
+
     return G, FIRST, FOLLOW, tabelaLL1
 
 def coletar_atribuicoes(tokens_valores: list) -> set:
     """
-    Varre tokens por nível de profundidade para detectar padrões de atribuição
-    na forma ( <expr> <ident> ). Retorna conjunto de identificadores que
-    aparacem como alvo de atribuição nesta linha.
+    Vasculha tokens estruturados para detectar se ocorre padrão de
+    atribuição no formato:
+
+        ( <expressão> <identificador> )
+
+    Considerando profundidade:
+        - Coleta elementos apenas no nível 1
+        - Quando fecha parêntese e volta ao nível 0, checa se há padrão
+          de dois elementos, sendo o segundo obrigatoriamente um
+          identificador válido.
+
+    Retorna:
+        set: nomes de identificadores que aparecem como alvo de atribuição.
     """
     atribuicoes = set()
     profundidade = 0
     elementos_expr = []
 
     for token in tokens_valores:
+
+        # Abertura de parêntese
         if token == '(':
-            # Ao entrar na profundidade 0 -> 1, reiniciamos a coleção de elementos do expr.
             if profundidade == 0:
                 elementos_expr = []
             profundidade += 1
+            continue
 
-        elif token == ')':
+        # Fechamento de parêntese
+        if token == ')':
             profundidade -= 1
-            # Quando retornamos a profundidade 0, avaliamos se o expr tinha 2 elementos:
-            # formato típico de atribuição (valor, identificador).
-            if profundidade == 0:
-                if len(elementos_expr) == 2:
-                    tipo1, _ = elementos_expr[0]
-                    tipo2, val2 = elementos_expr[1]
-                    if tipo2 == 'ident' and val2 is not None:
-                        # aceita várias formas de valor (int, float, ident, res, subexpr)
-                        if tipo1 in ['int', 'float', 'subexpr', 'ident', 'res']:
-                            atribuicoes.add(val2)
-            elementos_expr = []
 
-        elif profundidade == 1:
-            # Só coletamos elementos quando estamos no nível de expressão imediato.
+            # Somente fecha atribuições completas ao retomar profundidade 0
+            if profundidade == 0 and len(elementos_expr) == 2:
+                tipo1, _ = elementos_expr[0]
+                tipo2, nome2 = elementos_expr[1]
+
+                if tipo2 == 'ident' and nome2 is not None:
+                    if tipo1 in ['int', 'float', 'ident', 'res', 'subexpr']:
+                        atribuicoes.add(nome2)
+
+            elementos_expr = []
+            continue
+
+        # Coleta apenas no nível 1
+        if profundidade == 1:
             if isinstance(token, int):
                 elementos_expr.append(('int', None))
             elif isinstance(token, float):
                 elementos_expr.append(('float', None))
             elif isinstance(token, str):
                 tl = token.lower()
+
                 if tl in ['res', 'if', 'while']:
                     elementos_expr.append((tl, None))
                 elif token in ['+', '-', '*', '/', '%', '^', '|',
@@ -473,154 +769,220 @@ def coletar_atribuicoes(tokens_valores: list) -> set:
                     elementos_expr.append(('op', token))
                 else:
                     elementos_expr.append(('ident', token))
+
     return atribuicoes
 
 def criar_contexto() -> dict:
     """
-    Cria e devolve o dicionário de contexto usado por todas as
-    funções auxiliares durante a análise.
+    Cria estrutura usada durante a análise semântica, contendo
+    pilhas, árvore anotada, erros e estado da linha.
+
+    Retorna:
+        dict: contexto totalmente inicializado.
     """
     return {
-        'erros': [],               # lista de strings
-        'arvore_anotada': [],      # lista de nós anotados
-        'pilha_tipos': [],         # pilha de tipos
-        'pilha_valores': [],      # pilha de valores literais (quando houver)
-        'idx_valor': 0,            # índice corrente em tokens_processaveis
+        'erros': [],
+        'arvore_anotada': [],
+        'pilha_tipos': [],
+        'pilha_valores': [],
+        'idx_valor': 0,
         'memorias_decl_nesta_linha': set()
     }
 
 def tokens_processaveis_de(tokens_valores: list) -> list:
-    """Retorna os tokens filtrados removendo parênteses."""
-    return [v for v in tokens_valores if v not in ['(', ')']]
+    """
+    Remove parênteses dos tokens e retorna apenas valores úteis.
 
-def consumir_literal(ctx: dict, tokens_processaveis: list, tipo: str, numero_linha: int) -> None:
+    Args:
+        tokens_valores: lista de tokens brutos.
+
+    Retorna:
+        list: tokens sem '(' e ')'.
     """
-    Consome um literal (int/float) a partir de tokens_processaveis usando
-    ctx['idx_valor'], atualiza pilhas e árvore anotada. Em caso de token
-    inesperado anexa erro em ctx['erros'].
+    return [v for v in tokens_valores if v not in ('(', ')')]
+
+def consumir_literal(ctx: dict, tokens_proc: list, tipo: str, linha: int) -> None:
     """
-    if ctx['idx_valor'] >= len(tokens_processaveis):
-        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Token inesperado")
+    Consome um literal numérico (int ou float).
+
+    Atualiza:
+        - ctx['idx_valor']
+        - ctx['pilha_tipos']
+        - ctx['pilha_valores']
+        - ctx['arvore_anotada']
+
+    Em caso de falha, registra erro sem lançar exceção.
+    """
+    if ctx['idx_valor'] >= len(tokens_proc):
+        ctx['erros'].append(
+            f"ERRO SEMÂNTICO [Linha {linha}]: Literal esperado, mas tokens acabaram."
+        )
         return
 
-    valor = tokens_processaveis[ctx['idx_valor']]
+    valor = tokens_proc[ctx['idx_valor']]
     ctx['idx_valor'] += 1
+
     ctx['pilha_tipos'].append(tipo)
     ctx['pilha_valores'].append(valor)
+
     ctx['arvore_anotada'].append({
         'tipo_no': 'LITERAL',
         'tipo_inferido': tipo,
         'valor': valor,
-        'linha': numero_linha
+        'linha': linha
     })
 
-def processar_identificador(ctx: dict, tokens_processaveis: list,
-                            tabela_simbolos: dict, atribuicoes_nomes: set,
-                            numero_linha: int):
+def processar_identificador(ctx: dict, tokens_proc: list, tabela_simbolos: dict, atribuicoes: set, linha: int) -> dict:
     """
-    Processa um identificador: pode ser atribuição (se nome em atribuicoes_nomes)
-    ou leitura (buscar na tabela). Atualiza ctx e retorna tabela_simbolos
-    possivelmente modificada.
+    Processa um identificador, que pode representar:
+
+    1) Atribuição:
+        nome pertence ao conjunto de 'atribuicoes'.
+        Consome topo da pilha de tipos/valores.
+
+    2) Leitura:
+        Busca na tabela. Se inexistente → erro; se não inicializada → erro.
+
+    Após processar:
+        empilha tipo e valor resultante e adiciona nó à árvore anotada.
+
+    Retorna:
+        tabela_simbolos atualizada.
     """
-    if ctx['idx_valor'] >= len(tokens_processaveis):
-        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Token inesperado")
-        return tabela_simbolos
 
-    nome = tokens_processaveis[ctx['idx_valor']]
-    ctx['idx_valor'] += 1
-
-    # Verifica se nome é token sintático indevido tratado como ident
-    if nome in ['(', ')', '+', '-', '*', '/', '%', '^', '|',
-                '<', '>', '<=', '>=', '==', '!=', 'IF', 'WHILE', 'RES', 'res']:
+    # Falha: tokens acabaram
+    if ctx['idx_valor'] >= len(tokens_proc):
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Token sintático '{nome}' tratado como identificador inválido"
+            f"ERRO SEMÂNTICO [Linha {linha}]: Token inesperado ao processar identificador."
         )
         return tabela_simbolos
 
-    eh_atribuicao = nome in atribuicoes_nomes
+    nome = tokens_proc[ctx['idx_valor']]
+    ctx['idx_valor'] += 1
 
-    if eh_atribuicao:
-        # Atribuição: consome topo da pilha como valor a ser atribuído
-        if len(ctx['pilha_tipos']) < 1:
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Atribuição requer valor")
+    # Token sintático inválido
+    if nome in ['(', ')', '+', '-', '*', '/', '%', '^', '|',
+                '<', '>', '<=', '>=', '==', '!=', 'IF', 'WHILE', 'RES', 'res']:
+        ctx['erros'].append(
+            f"ERRO SEMÂNTICO [Linha {linha}]: Token '{nome}' não é identificador válido."
+        )
+        return tabela_simbolos
+
+    # ------------------------------------------
+    # Caso 1: ATRIBUIÇÃO
+    # ------------------------------------------
+    if nome in atribuicoes:
+
+        # Requer valor no topo da pilha
+        if not ctx['pilha_tipos']:
+            ctx['erros'].append(
+                f"ERRO SEMÂNTICO [Linha {linha}]: Atribuição sem valor para '{nome}'."
+            )
             return tabela_simbolos
 
         tipo_valor = ctx['pilha_tipos'].pop()
         valor = ctx['pilha_valores'].pop() if ctx['pilha_valores'] else None
 
-        # atualizar tabela: marca como inicializada (True)
-        tabela_simbolos = adicionarSimbolo(tabela_simbolos, nome, tipo_valor, True, valor, numero_linha)
+        tabela_simbolos = adicionarSimbolo(
+            tabela_simbolos, nome, tipo_valor, True, valor, linha
+        )
 
         ctx['memorias_decl_nesta_linha'].add(nome)
-        # empilha novamente o tipo/valor resultante da atribuição
+
+        # Resultado da atribuição volta para pilha
         ctx['pilha_tipos'].append(tipo_valor)
         ctx['pilha_valores'].append(valor)
 
         ctx['arvore_anotada'].append({
             'tipo_no': 'ATRIBUICAO',
-            'tipo_inferido': tipo_valor if tipo_valor is not None else 'desconhecido',
+            'tipo_inferido': tipo_valor,
             'nome': nome,
-            'valor': None,
-            'linha': numero_linha
+            'valor': valor,
+            'linha': linha
         })
+
         return tabela_simbolos
 
-    # Leitura: buscar símbolo
+    # ------------------------------------------
+    # Caso 2: LEITURA
+    # ------------------------------------------
     info = buscarSimbolo(tabela_simbolos, nome)
+
     if info is None:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Variável '{nome}' usada sem declaração prévia\nContexto: ({nome})"
+            f"ERRO SEMÂNTICO [Linha {linha}]: Variável '{nome}' usada sem declaração."
         )
         tipo = 'desconhecido'
-        valor = "X"
-        tipo_valor = 'desconhecido'
-        tabela_simbolos = adicionarSimbolo(tabela_simbolos, nome, tipo_valor, False, valor, numero_linha)
+        valor = 'X'
+        tabela_simbolos = adicionarSimbolo(tabela_simbolos, nome, tipo, False, valor, linha)
+
     elif not info.get('inicializada', False):
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Memória '{nome}' utilizada sem inicialização\nContexto: ({nome})"
+            f"ERRO SEMÂNTICO [Linha {linha}]: Variável '{nome}' usada sem inicialização."
         )
         tipo = info.get('tipo', 'desconhecido')
-        valor = "X"
-        tipo_valor = 'desconhecido'
-        # mantém símbolo (não inicializado)
-        tabela_simbolos = adicionarSimbolo(tabela_simbolos, nome, tipo_valor, False, valor, numero_linha)
+        valor = 'X'
+
     else:
         tipo = info.get('tipo', 'desconhecido')
         valor = info.get('valor')
-        marcarSimboloUsado(tabela_simbolos, nome, numero_linha)
+        marcarSimboloUsado(tabela_simbolos, nome, linha)
 
     ctx['pilha_tipos'].append(tipo)
     ctx['pilha_valores'].append(valor)
+
     ctx['arvore_anotada'].append({
         'tipo_no': 'LEITURA_VARIAVEL',
         'tipo_inferido': tipo,
         'nome': nome,
-        'linha': numero_linha
+        'linha': linha
     })
+
     return tabela_simbolos
 
-def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: list, numero_linha: int):
+def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: list, numero_linha: int) -> None:
     """
-    Processa a operação RES: verifica se token 'RES' está presente, consome
-    parâmetro inteiro na pilha e devolve o tipo do resultado consultando
-    historico_resultados.
+    Processa uma operação RES, que consulta resultados passados.
+    A operação exige 1 parâmetro inteiro na pilha de tipos.
+
+    Funcionamento:
+        - Verifica se o token atual é 'RES'
+        - Consome o parâmetro da pilha
+        - Valida se é inteiro
+        - Usa o número para indexar o histórico de resultados
+        - Empilha o tipo recuperado
+
+    Parâmetros:
+        ctx: dicionário com o estado da análise (pilhas, erros, árvore)
+        tokens_processaveis: tokens da linha após filtragem
+        historico_resultados: lista com tipos de resultados anteriores
+        numero_linha: número da linha original do código
     """
+
+    # Verificação de limites do índice do token
     if ctx['idx_valor'] >= len(tokens_processaveis):
-        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Token inesperado")
+        ctx['erros'].append(
+            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Token inesperado (fim da linha)"
+        )
         return
 
-    if tokens_processaveis[ctx['idx_valor']] not in ['RES', 'res']:
+    token = tokens_processaveis[ctx['idx_valor']]
+
+    # O comando RES deve aparecer explicitamente
+    if token not in ['RES', 'res']:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Esperado 'RES', encontrado '{tokens_processaveis[ctx['idx_valor']]}'"
+            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Esperado 'RES', encontrado '{token}'"
         )
         ctx['idx_valor'] += 1
         return
 
-    # consome o token RES
+    # Consome o token RES
     ctx['idx_valor'] += 1
 
+    # RES exige um parâmetro na pilha
     if len(ctx['pilha_tipos']) < 1:
-        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES requer um parâmetro")
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES requer um parâmetro na pilha")
+        # Registra nó inconsistente e segue
         ctx['pilha_tipos'].append('desconhecido')
         ctx['pilha_valores'].append(None)
         ctx['arvore_anotada'].append({
@@ -631,13 +993,13 @@ def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: li
         })
         return
 
+    # Desempilha o tipo e valor concretos
     tipo_param = ctx['pilha_tipos'].pop()
     n_valor = ctx['pilha_valores'].pop() if ctx['pilha_valores'] else None
 
+    # O parâmetro precisa ser inteiro
     if tipo_param != 'int':
-        ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES requer parâmetro inteiro, recebeu '{tipo_param}'"
-        )
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES requer parâmetro inteiro; recebeu '{tipo_param}'")
         ctx['pilha_tipos'].append('desconhecido')
         ctx['pilha_valores'].append(None)
         ctx['arvore_anotada'].append({
@@ -648,8 +1010,9 @@ def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: li
         })
         return
 
+    # O valor concreto deve ser inteiro
     if not isinstance(n_valor, int):
-        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES com valor inválido: {n_valor}")
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES parâmetro inválido: {n_valor}")
         ctx['pilha_tipos'].append('desconhecido')
         ctx['pilha_valores'].append(None)
         ctx['arvore_anotada'].append({
@@ -661,18 +1024,27 @@ def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: li
         return
 
     n = int(n_valor)
+
+    # Índice deve ser não negativo
     if n < 0:
-        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES requer N não negativo")
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES requer N >= 0")
         tipo_resultado = 'desconhecido'
+
+    # N não pode ultrapassar histórico
     elif n >= len(historico_resultados):
-        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES({n}) referencia linha inexistente")
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: RES({n}) fora do alcance do histórico")
         tipo_resultado = 'desconhecido'
+
     else:
+        # Consulta resultado anterior
         idx_resultado = len(historico_resultados) - 1 - n
         tipo_resultado = historico_resultados[idx_resultado].get('tipo', 'desconhecido')
 
+    # Resultado final da operação
     ctx['pilha_tipos'].append(tipo_resultado)
     ctx['pilha_valores'].append(None)
+
+    # Adiciona nó na árvore anotada
     ctx['arvore_anotada'].append({
         'tipo_no': 'RES',
         'tipo_inferido': tipo_resultado,
@@ -680,72 +1052,90 @@ def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: li
         'linha': numero_linha
     })
 
-def processar_operador_aritmetico(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int):
+def processar_operador_aritmetico(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int) -> None:
     """
-    Processa operadores aritméticos: + - * / % ^ |.
-    Valida número de operandos e tipos conforme regras_semanticas.
+    Processa operadores aritméticos de dois operandos.
+
+    Operadores:
+        +, -, *, /, %, ^, |
+
+    A validação baseia-se em regras_semanticas['operadores_aritmeticos'].
+
+    Fluxo:
+        - Consome token do operador
+        - Verifica se há dois operandos na pilha
+        - Desempilha operandos
+        - Valida tipos conforme regras
+        - Reempilha o tipo resultante
     """
-    # consulta regra; se não houver, consideramos regra vazia para evitar KeyError
+
     regra = regras_semanticas.get('operadores_aritmeticos', {}).get(simbolo, {'aceita': [], 'aceita_base': []})
 
-    # consumimos operador (o índice avança — esse avanço refere-se ao consumo do token no fluxo original)
+    # Consome símbolo do fluxo
     ctx['idx_valor'] += 1
 
+    # Operadores aritméticos exigem 2 operandos
     if len(ctx['pilha_tipos']) < 2:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Operador '{simbolo}' requer dois operandos\nContexto: operação incompleta"
+            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+            f"Operador '{simbolo}' requer dois operandos (insuficientes)"
         )
         return
 
+    # Desempilha operandos
     tipo2 = ctx['pilha_tipos'].pop()
     tipo1 = ctx['pilha_tipos'].pop()
-    # descartamos valores concretos (não precisamos deles aqui)
+
+    # Descarta valores concretos
     if ctx['pilha_valores']:
         ctx['pilha_valores'].pop()
     if ctx['pilha_valores']:
         ctx['pilha_valores'].pop()
 
-    # checagens específicas por operador
+    # Tratamento específico para potência
     if simbolo == '^':
-        if tipo1 not in regra.get('aceita_base', []):
-            ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: Potência requer base int ou float\nContexto: ({tipo1} {tipo2} ^)"
-            )
-        if tipo2 != 'int':
-            ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: Potência requer expoente inteiro\nContexto: ({tipo1} {tipo2} ^)"
-            )
+        base_valida = tipo1 in regra.get('aceita_base', [])
+        exp_valido = tipo2 == 'int'
+
+        if not base_valida:
+            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Base inválida para '^' ({tipo1})")
+        if not exp_valido:
+            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Expoente deve ser int (recebido '{tipo2}')")
+
         tipo_resultado = promoverTipo(tipo1, 'int')
 
+    # Divisão inteira e módulo
     elif simbolo in ['/', '%']:
         if tipo1 != 'int' or tipo2 != 'int':
             ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: Operador '{simbolo}' requer operandos inteiros\nContexto: ({tipo1} {tipo2} {simbolo})"
+                f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+                f"Operador '{simbolo}' exige inteiros ({tipo1}, {tipo2})"
             )
         tipo_resultado = 'int'
 
+    # Divisão float customizada '|'
     elif simbolo == '|':
-        if tipo1 not in regra.get('aceita', []) or tipo2 not in regra.get('aceita', []):
+        if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
             ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: Divisão float requer operandos numéricos\nContexto: ({tipo1} {tipo2} |)"
+                f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+                f"Operador '|' exige operandos numéricos"
             )
         tipo_resultado = 'float'
 
     else:
-        # operadores binários comuns (+, -, *)
-        if tipo1 not in regra.get('aceita', []) or tipo2 not in regra.get('aceita', []):
+        # Operadores binários + - *
+        if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
             ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: Operador '{simbolo}' com tipos incompatíveis\nContexto: ({tipo1} {tipo2} {simbolo})"
+                f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+                f"Tipos incompatíveis para '{simbolo}' ({tipo1}, {tipo2})"
             )
         tipo_resultado = promoverTipo(tipo1, tipo2)
 
-    if tipo_resultado == 'desconhecido':
-        ctx['pilha_tipos'].append('desconhecido')
-        ctx['pilha_valores'].append(None)
-        return
-
+    # Empilha resultado
     ctx['pilha_tipos'].append(tipo_resultado)
     ctx['pilha_valores'].append(None)
+
+    # Nó da árvore
     ctx['arvore_anotada'].append({
         'tipo_no': 'OPERACAO',
         'operador': simbolo,
@@ -754,35 +1144,52 @@ def processar_operador_aritmetico(ctx: dict, simbolo: str, regras_semanticas: di
         'linha': numero_linha
     })
 
-def processar_comparacao(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int):
+def processar_comparacao(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int) -> None:
     """
-    Processa operadores relacionais (< > <= >= == !=). Gera tipo booleano.
+    Processa operadores relacionais (<, >, <=, >=, ==, !=).
+
+    Sempre retorna booleano.
+
+    Fluxo:
+        - Consome token
+        - Verifica dois operandos
+        - Desempilha operandos
+        - Valida tipos com regras_semanticas
+        - Empilha 'booleano'
     """
+
     regra = regras_semanticas.get('operadores_relacionais', {}).get(simbolo, {'aceita': []})
+
     ctx['idx_valor'] += 1
 
     if len(ctx['pilha_tipos']) < 2:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Operador '{simbolo}' requer dois operandos\nContexto: comparação incompleta"
+            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+            f"Comparação '{simbolo}' requer dois operandos"
         )
         return
 
     tipo2 = ctx['pilha_tipos'].pop()
     tipo1 = ctx['pilha_tipos'].pop()
 
+    # descarta valores concretos
     if ctx['pilha_valores']:
         ctx['pilha_valores'].pop()
     if ctx['pilha_valores']:
         ctx['pilha_valores'].pop()
 
-    if tipo1 not in regra.get('aceita', []) or tipo2 not in regra.get('aceita', []):
+    # Verificação de tipos
+    if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: Comparação '{simbolo}' com tipos incompatíveis\nContexto: ({tipo1} {tipo2} {simbolo})"
+            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+            f"Comparação '{simbolo}' inválida entre '{tipo1}' e '{tipo2}'"
         )
 
     tipo_resultado = 'booleano'
+
     ctx['pilha_tipos'].append(tipo_resultado)
     ctx['pilha_valores'].append(None)
+
     ctx['arvore_anotada'].append({
         'tipo_no': 'COMPARACAO',
         'operador': simbolo,
@@ -791,22 +1198,32 @@ def processar_comparacao(ctx: dict, simbolo: str, regras_semanticas: dict, numer
         'linha': numero_linha
     })
 
-def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int):
+def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int) -> None:
     """
-    Processa estruturas IF e WHILE consumindo tipos da pilha e
-    validando tipo de condição (deve ser booleano).
+    Processa estruturas de controle: IF e WHILE.
+
+    Regras:
+        IF    - condição (booleano), then, else
+        WHILE - condição (booleano), corpo
+
+    Ambos desempilham seus componentes e empilham o tipo do bloco.
+    O tipo final de IF é promover(then, else).
+    O tipo final de WHILE é o tipo do corpo.
     """
-    # consumimos "token lógico" (índice avança — mantém comportamento original)
+
     ctx['idx_valor'] += 1
 
+    # Tratamento da estrutura IF
     if simbolo == 'if':
         if len(ctx['pilha_tipos']) < 3:
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF requer condição e dois ramos\nContexto: estrutura IF incompleta")
+            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF incompleto")
             return
 
         tipo_else = ctx['pilha_tipos'].pop()
         tipo_then = ctx['pilha_tipos'].pop()
         tipo_cond = ctx['pilha_tipos'].pop()
+
+        # Descarta valores
         if ctx['pilha_valores']:
             ctx['pilha_valores'].pop()
         if ctx['pilha_valores']:
@@ -815,11 +1232,13 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int):
             ctx['pilha_valores'].pop()
 
         if tipo_cond != 'booleano':
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF sem condição de comparação válida\nContexto: condição tipo '{tipo_cond}'")
+            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF requer condição booleana")
 
         tipo_resultado = promoverTipo(tipo_then, tipo_else)
+
         ctx['pilha_tipos'].append(tipo_resultado)
         ctx['pilha_valores'].append(None)
+
         ctx['arvore_anotada'].append({
             'tipo_no': 'CONDICIONAL_IF',
             'tipo_inferido': tipo_resultado,
@@ -827,25 +1246,31 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int):
             'tipos_ramos': [tipo_then, tipo_else],
             'linha': numero_linha
         })
+        return
 
-    elif simbolo == 'while':
+    # Tratamento da estrutura WHILE
+    if simbolo == 'while':
         if len(ctx['pilha_tipos']) < 2:
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE requer condição e corpo\nContexto: estrutura WHILE incompleta")
+            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE incompleto")
             return
 
         tipo_corpo = ctx['pilha_tipos'].pop()
         tipo_cond = ctx['pilha_tipos'].pop()
+
+        # Descarta valores concretos
         if ctx['pilha_valores']:
             ctx['pilha_valores'].pop()
         if ctx['pilha_valores']:
             ctx['pilha_valores'].pop()
 
         if tipo_cond != 'booleano':
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE sem condição de comparação válida\nContexto: condição tipo '{tipo_cond}'")
+            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE requer condição booleana")
 
         tipo_resultado = tipo_corpo
+
         ctx['pilha_tipos'].append(tipo_resultado)
         ctx['pilha_valores'].append(None)
+
         ctx['arvore_anotada'].append({
             'tipo_no': 'LOOP_WHILE',
             'tipo_inferido': tipo_resultado,
@@ -853,43 +1278,53 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int):
             'tipo_corpo': tipo_corpo,
             'linha': numero_linha
         })
+        return
 
 def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: dict, regras_semanticas: dict, historico_resultados: list, numero_linha: int):
     """
-    Interface pública para análise semântica de uma linha (derivação + tokens).
-    Divide a tarefa em funções externas menores para melhor legibilidade,
-    testabilidade e manutenção.
+    Realiza a análise semântica de uma linha inteira.
+
+    Divide o processo em múltiplas funções especializadas:
+        - Literais
+        - Identificadores
+        - Operadores aritméticos
+        - Comparações
+        - Estruturas de controle
+        - RES
 
     Retorna:
-        tabela_simbolos (atualizada),
-        erros (lista de strings),
-        arvore_anotada (lista de nós),
-        tipo_final (str),
-        memorias_declaradas_nesta_linha (set)
+        (tabela_simbolos, erros, arvore_anotada, tipo_final, mems_declaradas)
     """
-    # contexto compartilhado por auxiliares
+
+    # Cria o contexto interno da análise
     ctx = criar_contexto()
 
-    # identifica possíveis nomes que são alvo de atribuição nessa linha
+    # Identifica identificadores com atribuição
     atribuicoes_nomes = coletar_atribuicoes(tokens_valores)
 
+    # Converte tokens brutos para tokens processáveis
     tokens_processaveis = tokens_processaveis_de(tokens_valores)
 
-    # guarda para retorno
+    # Para retorno final
     memorias_declaradas_nesta_linha = ctx['memorias_decl_nesta_linha']
 
-    # segurança para EPS: manter compatibilidade se EPS existir no escopo externo
+    # Suporte opcional para EPS
     eps = globals().get('EPS', None)
 
-    # percorre a derivação e delega tratamento por símbolo
+    # Caminha por cada produção derivada
     for nao_terminal, producao in derivacao:
+
         if not producao:
             continue
+
+        # Ignora produções EPS
         if eps is not None and producao == [eps]:
             continue
 
+        # Analisa cada símbolo individualmente
         for simbolo in producao:
-            # ignorar parênteses sintáticos da produção
+
+            # Ignora tokens sintáticos
             if simbolo in ['(', ')']:
                 continue
 
@@ -900,9 +1335,7 @@ def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: di
                 consumir_literal(ctx, tokens_processaveis, 'float', numero_linha)
 
             elif simbolo == 'ident':
-                tabela_simbolos = processar_identificador(
-                    ctx, tokens_processaveis, tabela_simbolos, atribuicoes_nomes, numero_linha
-                )
+                tabela_simbolos = processar_identificador(ctx, tokens_processaveis, tabela_simbolos, atribuicoes_nomes, numero_linha)
 
             elif simbolo == 'res':
                 processar_res(ctx, tokens_processaveis, historico_resultados, numero_linha)
@@ -919,56 +1352,133 @@ def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: di
             elif simbolo == 'while':
                 processar_estrutura_controle(ctx, 'while', numero_linha)
 
-            # quaisquer outros símbolos da gramática (se existirem) podem ser tratados aqui
-
-    # resultado final
+    # O tipo final é o topo da pilha
     tipo_final = ctx['pilha_tipos'][-1] if ctx['pilha_tipos'] else 'desconhecido'
 
-    # sincroniza memorias_declaradas_nesta_linha do contexto para variável externa retorno
     memorias_declaradas_nesta_linha = ctx['memorias_decl_nesta_linha']
 
-    return tabela_simbolos, ctx['erros'], ctx['arvore_anotada'], tipo_final, memorias_declaradas_nesta_linha
+    return ( tabela_simbolos, ctx['erros'], ctx['arvore_anotada'], tipo_final, memorias_declaradas_nesta_linha)
 
-# -------------------------
-# Analisador Semântico - Validação de Memória
-def analisarSemanticaMemoria(tabela_simbolos, numero_linha, memorias_declaradas_nesta_linha):
+def analisarSemanticaMemoria(tabela_simbolos: dict, numero_linha: int, memorias_declaradas_nesta_linha: list[str]) -> list[str]:
+    """
+    Verifica regras semânticas relacionadas ao uso de MEM/identificadores
+    declarados ou atribuídos na linha atual.
+
+    Parâmetros
+    ----------
+    tabela_simbolos : dict
+        Tabela contendo informações de todos os identificadores e memórias.
+    numero_linha : int
+        Linha do código sendo analisada.
+    memorias_declaradas_nesta_linha : list[str]
+        Lista de tokens identificados como memória ou variáveis referenciadas
+        nesta linha específica.
+
+    Retorna
+    -------
+    list[str]
+        Lista de mensagens de erro semântico encontradas.
+    """
+
     erros = []
+
+    # Percorre todos os nomes detectados como possíveis memórias/variáveis
     for nome in memorias_declaradas_nesta_linha:
-        if nome in ['(', ')', '+', '-', '*', '/', '%', '^', '|', '<', '>', '<=', '>=', '==', '!=']:
+
+        # Ignorar operadores e símbolos que não podem ser nomes
+        if nome in [
+            '(', ')', '+', '-', '*', '/', '%', '^', '|',
+            '<', '>', '<=', '>=', '==', '!='
+        ]:
             continue
 
+        # Buscar na tabela de símbolos
         info = tabela_simbolos.get(nome)
         if not info:
+            # Identificador não declarado — em algumas linguagens seria erro,
+            # mas aqui pode ser permitido dependendo da gramática.
+            # Mantemos comportamento atual: ignorar.
             continue
 
-        # 🔹 Se foi uma atribuição (linha de declaração == linha atual), ignora
-        if info['linha_declaracao'] == numero_linha:
+        # Se a memória foi declarada/atribuída nesta mesma linha,
+        # não geramos erro (regra definida pelo modelo atual).
+        if info.get('linha_declaracao') == numero_linha:
             continue
 
     return erros
 
-# -------------------------
-# Analisador Semântico - Validação de Estruturas de Controle
-def analisarSemanticaControle(arvore_anotada, numero_linha):
+def analisarSemanticaControle(arvore_anotada: list[dict], numero_linha: int) -> list[str]:
+    """
+    Valida regras semânticas de estruturas de controle como IF e WHILE.
+
+    Parâmetros
+    ----------
+    arvore_anotada : list[dict]
+        Lista de nós anotados da análise sintática contendo os tipos inferidos.
+    numero_linha : int
+        Linha do código sendo analisada.
+
+    Retorna
+    -------
+    list[str]
+        Lista de erros semânticos detectados.
+    """
+
     erros = []
+
+    # Percorre todos os nós produzidos pela análise sintática
     for no in arvore_anotada:
-        if no['tipo_no'] == 'CONDICIONAL_IF':
-            if no['tipo_condicao'] != 'booleano':
-                erros.append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF com condição não booleana")
-        elif no['tipo_no'] == 'LOOP_WHILE':
-            if no['tipo_condicao'] != 'booleano':
-                erros.append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE com condição não booleana")
+
+        tipo_no = no.get('tipo_no')
+        tipo_cond = no.get('tipo_condicao')
+
+        # Validação de IF
+        if tipo_no == 'CONDICIONAL_IF':
+            # A condição deve ser obrigatoriamente booleana
+            if tipo_cond != 'booleano':
+                erros.append(
+                    f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+                    "IF com condição não booleana."
+                )
+
+        # Validação de WHILE
+        elif tipo_no == 'LOOP_WHILE':
+            # A condição também deve ser booleano
+            if tipo_cond != 'booleano':
+                erros.append(
+                    f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+                    "WHILE com condição não booleana."
+                )
+
     return erros
 
-# -------------------------
-# Geração da Árvore Atribuída
-def gerarArvoreAtribuida(arvore_anotada, tipo_final, numero_linha):
+def gerarArvoreAtribuida(arvore_anotada: list[dict], tipo_final: str, numero_linha: int) -> dict:
+    """
+    Gera a árvore final de atributos após a validação semântica.
+
+    Parâmetros
+    ----------
+    arvore_anotada : list[dict]
+        Lista de nós anotados com informações sintáticas e semânticas.
+    tipo_final : str
+        Tipo inferido da expressão ou comando.
+    numero_linha : int
+        Linha correspondente à construção analisada.
+
+    Retorna
+    -------
+    dict
+        Estrutura hierárquica representando o nó raiz da árvore atribuída.
+    """
+
+    # Cria o nó raiz da árvore com as informações principais
     arvore_atribuida = {
-        'tipo_no': 'PROGRAMA',
-        'tipo_inferido': tipo_final,
-        'linha': numero_linha,
-        'filhos': arvore_anotada
+        'tipo_no': 'PROGRAMA',         # Tipo do nó raiz
+        'tipo_inferido': tipo_final,   # Tipo deduzido pela análise semântica
+        'linha': numero_linha,         # Linha do código original
+        'filhos': arvore_anotada       # Nós internos já analisados
     }
+
     return arvore_atribuida
 
 ## FASE 4: TAC, ASSEMBLY E OTIMIZAÇÕES
