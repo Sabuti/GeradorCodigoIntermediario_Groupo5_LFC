@@ -1592,6 +1592,205 @@ def processar_no_tac(no: dict, tac: list) -> dict:
         # Nó desconhecido
         return {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
 
+def gerar_tac_operacao(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para operações aritméticas binárias.
+    Suporta conversão automática de int para float quando necessário.
+    """
+    operador = no.get('operador')
+    tipos_operandos = no.get('operandos', ['int', 'int'])
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    # Como estamos em RPN, os operandos já foram processados
+    # Precisamos recuperá-los da estrutura da árvore
+    # Por simplificação, assumimos que temos acesso aos operandos na ordem correta
+    
+    # Cria temporário para o resultado
+    temp_resultado = novo_temp()
+    
+    # Adiciona instrução TAC
+    tac.append({
+        'op': operador,
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'tipo_a': tipos_operandos[0] if len(tipos_operandos) > 0 else 'int',
+        'tipo_b': tipos_operandos[1] if len(tipos_operandos) > 1 else 'int',
+        'comment': f'{operador} operation'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
+
+def gerar_tac_comparacao(no: dict, tac: list) -> dict:
+    """Gera TAC para operações relacionais."""
+    operador = no.get('operador')
+    tipos_operandos = no.get('operandos', ['int', 'int'])
+    
+    temp_resultado = novo_temp()
+    
+    tac.append({
+        'op': operador,
+        'dest': temp_resultado,
+        'tipo': 'booleano',
+        'tipo_a': tipos_operandos[0],
+        'tipo_b': tipos_operandos[1],
+        'comment': f'comparison {operador}'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': 'booleano',
+        'kind': 'temp'
+    }
+
+def gerar_tac_if(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para estrutura condicional IF.
+    Formato: (condição then else IF)
+    """
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    # Cria labels
+    label_else = novo_label()
+    label_end = novo_label()
+    
+    # Temporário para o resultado final
+    temp_resultado = novo_temp()
+    
+    # Instrução de salto condicional
+    tac.append({
+        'op': 'ifFalse',
+        'dest': label_else,
+        'tipo': 'booleano',
+        'comment': 'if condition check'
+    })
+    
+    # Ramo then (será processado posteriormente)
+    tac.append({
+        'op': '=',
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': 'then branch result'
+    })
+    
+    # Salto para o fim
+    tac.append({
+        'op': 'goto',
+        'dest': label_end,
+        'comment': 'skip else branch'
+    })
+    
+    # Label do else
+    tac.append({
+        'op': 'label',
+        'dest': label_else,
+        'comment': 'else branch'
+    })
+    
+    # Ramo else
+    tac.append({
+        'op': '=',
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': 'else branch result'
+    })
+    
+    # Label do fim
+    tac.append({
+        'op': 'label',
+        'dest': label_end,
+        'comment': 'end if'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
+
+def gerar_tac_while(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para estrutura de repetição WHILE.
+    Formato: (condição corpo WHILE)
+    """
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    # Cria labels
+    label_inicio = novo_label()
+    label_fim = novo_label()
+    
+    # Temporário para o resultado
+    temp_resultado = novo_temp()
+    
+    # Label de início do loop
+    tac.append({
+        'op': 'label',
+        'dest': label_inicio,
+        'comment': 'while loop start'
+    })
+    
+    # Avaliação da condição
+    tac.append({
+        'op': 'ifFalse',
+        'dest': label_fim,
+        'tipo': 'booleano',
+        'comment': 'while condition check'
+    })
+    
+    # Corpo do loop (será processado posteriormente)
+    tac.append({
+        'op': '=',
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': 'loop body result'
+    })
+    
+    # Salto de volta para o início
+    tac.append({
+        'op': 'goto',
+        'dest': label_inicio,
+        'comment': 'repeat loop'
+    })
+    
+    # Label de fim do loop
+    tac.append({
+        'op': 'label',
+        'dest': label_fim,
+        'comment': 'while loop end'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
+
+def gerar_tac_res(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para comando RES.
+    RES recupera o resultado de N linhas anteriores.
+    """
+    parametro = no.get('parametro', 0)
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    temp_resultado = novo_temp()
+    
+    tac.append({
+        'op': 'res',
+        'a': parametro,
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': f'RES({parametro})'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
 
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
