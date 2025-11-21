@@ -1792,6 +1792,59 @@ def gerar_tac_res(no: dict, tac: list) -> dict:
         'kind': 'temp'
     }
 
+def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
+    """
+    Salva o TAC gerado em um arquivo de texto legível.
+    """
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write("THREE ADDRESS CODE (TAC)\n")
+        f.write("=" * 60 + "\n\n")
+        
+        for i, inst in enumerate(tac):
+            op = inst.get('op')
+            
+            if op == 'label':
+                f.write(f"{inst['dest']}:\n")
+            
+            elif op == 'goto':
+                f.write(f"  goto {inst['dest']}\n")
+            
+            elif op == 'ifFalse':
+                f.write(f"  ifFalse {inst.get('a', '?')} goto {inst['dest']}\n")
+            
+            elif op == '=':
+                a = inst.get('a', '?')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = {a}\n")
+            
+            elif op in ['+', '-', '*', '/', '|', '%', '^']:
+                a = inst.get('a', '?')
+                b = inst.get('b', '?')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = {a} {op} {b}\n")
+            
+            elif op in ['<', '>', '<=', '>=', '==', '!=']:
+                a = inst.get('a', '?')
+                b = inst.get('b', '?')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = {a} {op} {b}\n")
+            
+            elif op == 'res':
+                a = inst.get('a')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = RES({a})\n")
+            
+            else:
+                f.write(f"  {inst}\n")
+            
+            # Adiciona comentário se existir
+            comment = inst.get('comment')
+            if comment:
+                f.write(f"    ; {comment}\n")
+        
+        f.write("\n" + "=" * 60 + "\n")
+
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
