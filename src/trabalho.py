@@ -9,6 +9,29 @@ import math
 
 EPS = 'E'
 
+# CONTADORES GLOBAIS PARA TAC
+
+TEMP_COUNTER = 0
+LABEL_COUNTER = 0
+
+def novo_temp():
+    """Gera uma nova variável temporária única (t0, t1, t2, ...)"""
+    global TEMP_COUNTER
+    TEMP_COUNTER += 1
+    return f"t{TEMP_COUNTER}"
+
+def novo_label():
+    """Gera um novo rótulo único (L0, L1, L2, ...)"""
+    global LABEL_COUNTER
+    LABEL_COUNTER += 1
+    return f"L{LABEL_COUNTER}"
+
+def resetar_contadores_tac():
+    """Reseta os contadores de temporários e labels (útil para testes)"""
+    global TEMP_COUNTER, LABEL_COUNTER
+    TEMP_COUNTER = 0
+    LABEL_COUNTER = 0
+
 def lerArquivo(nomeArquivo):
     """
     Lê um arquivo linha por linha, removendo espaços extras e ignorando linhas vazias.
@@ -136,20 +159,6 @@ def estadoComparador(token):
     """Verifica se o token é um operador relacional válido."""
     return token in ["<", ">", "<=", ">=", "==", "!="]
 
-def RESorMEM(token):
-    if not token:
-        return False
-    estado = "Q0"
-    for ch in token:
-        if estado == "Q0":
-            if ch.isalpha() and ch.isupper():
-                estado = "QID"
-            else:
-                return False
-        elif estado == "QID":
-            if not (ch.isalpha() and ch.isupper()) and not ch.isdigit():
-                return False
-    return estado == "QID"
 
 def RESorMEM(token: str) -> bool:
     """
@@ -1482,6 +1491,107 @@ def gerarArvoreAtribuida(arvore_anotada: list[dict], tipo_final: str, numero_lin
     return arvore_atribuida
 
 ## FASE 4: TAC, ASSEMBLY E OTIMIZAÇÕES
+def gerarTAC(arvore_atribuida: dict) -> list[dict]:
+    """
+    Gera código intermediário em formato Three Address Code (TAC) a partir da árvore
+    sintática abstrata atribuída.
+    
+    Parâmetros:
+        arvore_atribuida: Árvore sintática abstrata com anotações de tipo da Fase 3
+        
+    Retorna:
+        Lista de instruções TAC no formato:
+        {
+            'op': operador,
+            'a': operando1 (opcional),
+            'b': operando2 (opcional),
+            'dest': destino,
+            'tipo': tipo do resultado,
+            'tipo_a': tipo do operando a (opcional),
+            'tipo_b': tipo do operando b (opcional)
+        }
+    """
+    tac = []
+    
+    # Processa a árvore atribuída
+    resultado = processar_no_tac(arvore_atribuida, tac)
+    
+    return tac
+
+def processar_no_tac(no: dict, tac: list) -> dict:
+    """
+    Processa recursivamente um nó da árvore e gera instruções TAC.
+    
+    Retorna um dicionário com informações sobre o resultado:
+    {
+        'temp': nome da variável/temporário que contém o resultado,
+        'tipo': tipo do resultado,
+        'kind': 'temp', 'var' ou 'imm' (temporário, variável ou imediato)
+    }
+    """
+    tipo_no = no.get('tipo_no')
+    
+    if tipo_no == 'PROGRAMA':
+        # Processa todos os filhos
+        resultado = None
+        for filho in no.get('filhos', []):
+            resultado = processar_no_tac(filho, tac)
+        return resultado if resultado else {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
+    
+    elif tipo_no == 'LITERAL':
+        # Literais retornam valores imediatos
+        valor = no.get('valor')
+        tipo = no.get('tipo_inferido', 'int')
+        return {
+            'temp': valor,
+            'tipo': tipo,
+            'kind': 'imm'
+        }
+    
+    elif tipo_no == 'LEITURA_VARIAVEL':
+        # Leitura de variável retorna o nome da variável
+        nome = no.get('nome')
+        tipo = no.get('tipo_inferido', 'int')
+        return {
+            'temp': nome,
+            'tipo': tipo,
+            'kind': 'var'
+        }
+    
+    elif tipo_no == 'ATRIBUICAO':
+        # Atribuição: não gera instrução TAC aqui (já foi processada pela operação anterior)
+        nome = no.get('nome')
+        tipo = no.get('tipo_inferido', 'int')
+        return {
+            'temp': nome,
+            'tipo': tipo,
+            'kind': 'var'
+        }
+    
+    elif tipo_no == 'OPERACAO':
+        # Operação aritmética binária
+        return gerar_tac_operacao(no, tac)
+    
+    elif tipo_no == 'COMPARACAO':
+        # Operação relacional
+        return gerar_tac_comparacao(no, tac)
+    
+    elif tipo_no == 'CONDICIONAL_IF':
+        # Estrutura condicional IF
+        return gerar_tac_if(no, tac)
+    
+    elif tipo_no == 'LOOP_WHILE':
+        # Estrutura de repetição WHILE
+        return gerar_tac_while(no, tac)
+    
+    elif tipo_no == 'RES':
+        # Comando especial RES
+        return gerar_tac_res(no, tac)
+    
+    else:
+        # Nó desconhecido
+        return {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
+
 
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
