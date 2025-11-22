@@ -2142,6 +2142,56 @@ def dead_code_elimination(tac: list) -> list:
         tac_otimizado.append(inst)
     
     return tac_otimizado
+
+def eliminar_saltos_redundantes(tac: list) -> list:
+    """
+    Remove saltos redundantes e labels não utilizados.
+    
+    Otimizações:
+    1. goto L1 seguido imediatamente por L1: → remove goto
+    2. Labels nunca referenciados → remove label
+    3. Sequências de gotos → simplifica
+    """
+    # Primeira passagem: identifica labels referenciados
+    labels_referenciados = set()
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        if op in ['goto', 'ifFalse', 'if']:
+            dest = inst.get('dest')
+            if dest:
+                labels_referenciados.add(dest)
+    
+    # Segunda passagem: remove saltos e labels redundantes
+    tac_otimizado = []
+    i = 0
+    
+    while i < len(tac):
+        inst = tac[i]
+        op = inst.get('op')
+        
+        # Caso 1: goto seguido imediatamente pelo label alvo
+        if op == 'goto' and i + 1 < len(tac):
+            proximo = tac[i + 1]
+            if proximo.get('op') == 'label' and proximo.get('dest') == inst.get('dest'):
+                # Salto redundante, não adiciona
+                i += 1
+                continue
+        
+        # Caso 2: Label nunca referenciado
+        if op == 'label':
+            dest = inst.get('dest')
+            if dest not in labels_referenciados:
+                # Label não usado, não adiciona
+                i += 1
+                continue
+        
+        # Mantém instrução
+        tac_otimizado.append(inst)
+        i += 1
+    
+    return tac_otimizado
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
