@@ -2083,6 +2083,65 @@ def constant_propagation(tac: list) -> list:
     
     return tac_otimizado
 
+def dead_code_elimination(tac: list) -> list:
+    """
+    Remove código morto (instruções cujo resultado nunca é usado).
+    
+    Implementa análise de liveness básica:
+    1. Identifica quais variáveis são usadas
+    2. Remove atribuições a variáveis nunca usadas
+    """
+    # Primeira passagem: identifica todas as variáveis usadas
+    variaveis_usadas = set()
+    variaveis_importantes = set()  # Variáveis que não podem ser removidas
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        # Marca operandos como usados
+        if op in ['+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+            a = inst.get('a')
+            b = inst.get('b')
+            if a and not eh_constante_numerica(a):
+                variaveis_usadas.add(a)
+            if b and not eh_constante_numerica(b):
+                variaveis_usadas.add(b)
+        
+        elif op == '=':
+            a = inst.get('a')
+            if a and not eh_constante_numerica(a):
+                variaveis_usadas.add(a)
+        
+        elif op in ['ifFalse', 'if', 'return']:
+            a = inst.get('a')
+            if a and not eh_constante_numerica(a):
+                variaveis_usadas.add(a)
+                variaveis_importantes.add(a)  # Condições são importantes
+        
+        # RES e chamadas são sempre importantes
+        elif op in ['res', 'call']:
+            dest = inst.get('dest')
+            if dest:
+                variaveis_importantes.add(dest)
+    
+    # Segunda passagem: remove código morto
+    tac_otimizado = []
+    
+    for inst in tac:
+        op = inst.get('op')
+        dest = inst.get('dest')
+        
+        # Atribuições a variáveis nunca usadas podem ser removidas
+        if op in ['=', '+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+            # Se é temporário não usado E não é importante, remove
+            if dest and dest.startswith('t') and dest not in variaveis_usadas and dest not in variaveis_importantes:
+                # Código morto detectado, não adiciona à saída
+                continue
+        
+        # Mantém instrução
+        tac_otimizado.append(inst)
+    
+    return tac_otimizado
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
