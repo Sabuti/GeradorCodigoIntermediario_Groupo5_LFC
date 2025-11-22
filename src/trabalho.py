@@ -1995,6 +1995,94 @@ def avaliar_comparacao(op: str, a, b) -> bool:
     else:
         raise ValueError(f"Operador de comparação desconhecido: {op}")
 
+def constant_propagation(tac: list) -> list:
+    """
+    Propaga valores constantes através do código.
+    
+    Exemplos:
+        t1 = 5
+        t2 = t1 + 3  →  t2 = 5 + 3  →  t2 = 8
+    """
+    tac_otimizado = []
+    constantes = {}  # Mapa de variáveis → valores constantes conhecidos
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        # Atribuição de constante
+        if op == '=':
+            a = inst.get('a')
+            dest = inst.get('dest')
+            
+            # Se atribui constante, registra no mapa
+            if eh_constante_numerica(a):
+                constantes[dest] = a
+                tac_otimizado.append(inst)
+            
+            # Se atribui variável que é constante conhecida, propaga
+            elif a in constantes:
+                valor_constante = constantes[a]
+                constantes[dest] = valor_constante
+                
+                tac_otimizado.append({
+                    'op': '=',
+                    'a': valor_constante,
+                    'dest': dest,
+                    'tipo': inst.get('tipo', 'int'),
+                    'comment': f'constant propagation: {a} → {valor_constante}'
+                })
+            else:
+                # Variável não é constante, remove do mapa se existir
+                if dest in constantes:
+                    del constantes[dest]
+                tac_otimizado.append(inst)
+        
+        # Operações binárias
+        elif op in ['+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+            a = inst.get('a')
+            b = inst.get('b')
+            dest = inst.get('dest')
+            
+            # Substitui operandos por valores constantes se conhecidos
+            a_substituido = constantes.get(a, a) if not eh_constante_numerica(a) else a
+            b_substituido = constantes.get(b, b) if not eh_constante_numerica(b) else b
+            
+            nova_inst = dict(inst)
+            nova_inst['a'] = a_substituido
+            nova_inst['b'] = b_substituido
+            
+            # Se operandos mudaram, adiciona comentário
+            if a_substituido != a or b_substituido != b:
+                nova_inst['comment'] = f'constant propagation: {a}→{a_substituido}, {b}→{b_substituido}'
+            
+            tac_otimizado.append(nova_inst)
+            
+            # Destino não é mais constante conhecida
+            if dest in constantes:
+                del constantes[dest]
+        
+        # Saltos condicionais
+        elif op in ['ifFalse', 'if']:
+            a = inst.get('a')
+            
+            if a and not eh_constante_numerica(a) and a in constantes:
+                nova_inst = dict(inst)
+                nova_inst['a'] = constantes[a]
+                nova_inst['comment'] = f'constant propagation: {a} → {constantes[a]}'
+                tac_otimizado.append(nova_inst)
+            else:
+                tac_otimizado.append(inst)
+        
+        # Labels e outros: mantém e limpa conhecimento de constantes (conservador)
+        elif op == 'label':
+            constantes.clear()  # Labels podem ser alvos de saltos, invalida análise
+            tac_otimizado.append(inst)
+        
+        else:
+            tac_otimizado.append(inst)
+    
+    return tac_otimizado
+
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
