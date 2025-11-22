@@ -1844,7 +1844,42 @@ def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
                 f.write(f"    ; {comment}\n")
         
         f.write("\n" + "=" * 60 + "\n")
-
+        
+def otimizarTAC(tac: list) -> list:
+    """
+    Aplica técnicas de otimização no código TAC.
+    
+    Implementa:
+    1. Constant Folding (avaliação de expressões constantes)
+    2. Constant Propagation (propagação de constantes)
+    3. Dead Code Elimination (eliminação de código morto)
+    4. Eliminação de Saltos Redundantes
+    
+    Cada otimização é aplicada em múltiplas passagens até não haver mais mudanças.
+    """
+    tac_otimizado = list(tac)  # Cópia para não modificar original
+    
+    mudou = True
+    iteracao = 0
+    max_iteracoes = 10  # Previne loops infinitos
+    
+    while mudou and iteracao < max_iteracoes:
+        mudou = False
+        tamanho_antes = len(tac_otimizado)
+        
+        # Aplica otimizações em ordem
+        tac_otimizado = constant_folding(tac_otimizado)
+        tac_otimizado = constant_propagation(tac_otimizado)
+        tac_otimizado = dead_code_elimination(tac_otimizado)
+        tac_otimizado = eliminar_saltos_redundantes(tac_otimizado)
+        
+        # Verifica se houve mudança
+        if len(tac_otimizado) != tamanho_antes:
+            mudou = True
+        
+        iteracao += 1
+    
+    return tac_otimizado
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
