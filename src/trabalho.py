@@ -1844,7 +1844,7 @@ def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
                 f.write(f"    ; {comment}\n")
         
         f.write("\n" + "=" * 60 + "\n")
-        
+
 def otimizarTAC(tac: list) -> list:
     """
     Aplica técnicas de otimização no código TAC.
@@ -1880,6 +1880,121 @@ def otimizarTAC(tac: list) -> list:
         iteracao += 1
     
     return tac_otimizado
+
+def constant_folding(tac: list) -> list:
+    """
+    Avalia expressões constantes em tempo de compilação.
+    
+    Exemplos:
+        t1 = 2 + 3  →  t1 = 5
+        t2 = 4 * 5  →  t2 = 20
+        t3 = 10 / 2 →  t3 = 5
+    """
+    tac_otimizado = []
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        # Operações aritméticas binárias
+        if op in ['+', '-', '*', '/', '|', '%', '^']:
+            a = inst.get('a')
+            b = inst.get('b')
+            
+            # Verifica se ambos operandos são constantes numéricas
+            if eh_constante_numerica(a) and eh_constante_numerica(b):
+                try:
+                    resultado = avaliar_operacao(op, a, b)
+                    
+                    # Substitui operação por atribuição direta
+                    tac_otimizado.append({
+                        'op': '=',
+                        'a': resultado,
+                        'dest': inst.get('dest'),
+                        'tipo': inst.get('tipo', 'int'),
+                        'comment': f'constant folding: {a} {op} {b} = {resultado}'
+                    })
+                    continue
+                except:
+                    # Se houver erro (divisão por zero, etc), mantém instrução original
+                    pass
+        
+        # Operações relacionais
+        elif op in ['<', '>', '<=', '>=', '==', '!=']:
+            a = inst.get('a')
+            b = inst.get('b')
+            
+            if eh_constante_numerica(a) and eh_constante_numerica(b):
+                try:
+                    resultado = avaliar_comparacao(op, a, b)
+                    
+                    tac_otimizado.append({
+                        'op': '=',
+                        'a': 1 if resultado else 0,  # booleano como inteiro
+                        'dest': inst.get('dest'),
+                        'tipo': 'booleano',
+                        'comment': f'constant folding: {a} {op} {b} = {resultado}'
+                    })
+                    continue
+                except:
+                    pass
+        
+        # Mantém instrução original se não foi otimizada
+        tac_otimizado.append(inst)
+    
+    return tac_otimizado
+
+def eh_constante_numerica(valor) -> bool:
+    """Verifica se um valor é uma constante numérica (int ou float)."""
+    return isinstance(valor, (int, float))
+
+def avaliar_operacao(op: str, a, b):
+    """Avalia uma operação aritmética entre duas constantes."""
+    a = float(a) if isinstance(a, (int, float)) else 0
+    b = float(b) if isinstance(b, (int, float)) else 0
+    
+    if op == '+':
+        return a + b
+    elif op == '-':
+        return a - b
+    elif op == '*':
+        return a * b
+    elif op == '/':
+        if b == 0:
+            raise ValueError("Divisão por zero")
+        return int(a // b)  # Divisão inteira
+    elif op == '|':
+        if b == 0:
+            raise ValueError("Divisão por zero")
+        return a / b  # Divisão float
+    elif op == '%':
+        if b == 0:
+            raise ValueError("Divisão por zero")
+        return int(a % b)
+    elif op == '^':
+        return a ** b
+    else:
+        raise ValueError(f"Operador desconhecido: {op}")
+
+def avaliar_comparacao(op: str, a, b) -> bool:
+    """Avalia uma comparação entre duas constantes."""
+    a = float(a) if isinstance(a, (int, float)) else 0
+    b = float(b) if isinstance(b, (int, float)) else 0
+    
+    if op == '<':
+        return a < b
+    elif op == '>':
+        return a > b
+    elif op == '<=':
+        return a <= b
+    elif op == '>=':
+        return a >= b
+    elif op == '==':
+        return abs(a - b) < 1e-9  # Comparação com tolerância para floats
+    elif op == '!=':
+        return abs(a - b) >= 1e-9
+    else:
+        raise ValueError(f"Operador de comparação desconhecido: {op}")
+
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
