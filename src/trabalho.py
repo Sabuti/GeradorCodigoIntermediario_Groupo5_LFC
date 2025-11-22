@@ -2192,6 +2192,87 @@ def eliminar_saltos_redundantes(tac: list) -> list:
         i += 1
     
     return tac_otimizado
+
+def gerar_relatorio_otimizacoes(tac_original: list, tac_otimizado: list, nome_arquivo: str = 'otimizacoes.md') -> None:
+    """
+    Gera um relatório detalhado das otimizações aplicadas.
+    """
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("# Relatório de Otimizações\n\n")
+        
+        # Estatísticas gerais
+        f.write("## Estatísticas Gerais\n\n")
+        f.write(f"- **Instruções TAC original**: {len(tac_original)}\n")
+        f.write(f"- **Instruções TAC otimizado**: {len(tac_otimizado)}\n")
+        
+        reducao = len(tac_original) - len(tac_otimizado)
+        percentual = (reducao / len(tac_original) * 100) if len(tac_original) > 0 else 0
+        f.write(f"- **Instruções removidas**: {reducao} ({percentual:.1f}%)\n\n")
+        
+        # Conta temporários
+        temps_original = contar_temporarios(tac_original)
+        temps_otimizado = contar_temporarios(tac_otimizado)
+        f.write(f"- **Temporários no TAC original**: {temps_original}\n")
+        f.write(f"- **Temporários no TAC otimizado**: {temps_otimizado}\n")
+        f.write(f"- **Temporários eliminados**: {temps_original - temps_otimizado}\n\n")
+        
+        # Análise detalhada
+        f.write("## Comparação TAC Original vs Otimizado\n\n")
+        f.write("### TAC Original\n```\n")
+        for inst in tac_original[:20]:  # Primeiras 20 instruções
+            f.write(formatar_instrucao_tac(inst) + "\n")
+        if len(tac_original) > 20:
+            f.write(f"... ({len(tac_original) - 20} instruções omitidas)\n")
+        f.write("```\n\n")
+        
+        f.write("### TAC Otimizado\n```\n")
+        for inst in tac_otimizado[:20]:
+            f.write(formatar_instrucao_tac(inst) + "\n")
+        if len(tac_otimizado) > 20:
+            f.write(f"... ({len(tac_otimizado) - 20} instruções omitidas)\n")
+        f.write("```\n\n")
+
+def contar_temporarios(tac: list) -> int:
+    """Conta o número de variáveis temporárias únicas no TAC."""
+    temporarios = set()
+    
+    for inst in tac:
+        dest = inst.get('dest')
+        if dest and dest.startswith('t'):
+            temporarios.add(dest)
+        
+        a = inst.get('a')
+        if a and isinstance(a, str) and a.startswith('t'):
+            temporarios.add(a)
+        
+        b = inst.get('b')
+        if b and isinstance(b, str) and b.startswith('t'):
+            temporarios.add(b)
+    
+    return len(temporarios)
+
+def formatar_instrucao_tac(inst: dict) -> str:
+    """Formata uma instrução TAC para exibição legível."""
+    op = inst.get('op')
+    
+    if op == 'label':
+        return f"{inst['dest']}:"
+    elif op == 'goto':
+        return f"  goto {inst['dest']}"
+    elif op == 'ifFalse':
+        return f"  ifFalse {inst.get('a', '?')} goto {inst['dest']}"
+    elif op == '=':
+        return f"  {inst['dest']} = {inst.get('a', '?')}"
+    elif op in ['+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+        return f"  {inst['dest']} = {inst.get('a', '?')} {op} {inst.get('b', '?')}"
+    elif op == 'res':
+        return f"  {inst['dest']} = RES({inst.get('a')})"
+    else:
+        return f"  {inst}"
+
+def salvar_tac_otimizado(tac: list, nome_arquivo: str = 'tac_otimizado.txt') -> None:
+    """Salva o TAC otimizado (mesmo formato do TAC original)."""
+    salvar_tac(tac, nome_arquivo)
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
