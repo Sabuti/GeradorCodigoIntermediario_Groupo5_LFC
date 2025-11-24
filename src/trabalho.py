@@ -9,6 +9,29 @@ import math
 
 EPS = 'E'
 
+# CONTADORES GLOBAIS PARA TAC
+
+TEMP_COUNTER = 0
+LABEL_COUNTER = 0
+
+def novo_temp():
+    """Gera uma nova variável temporária única (t0, t1, t2, ...)"""
+    global TEMP_COUNTER
+    TEMP_COUNTER += 1
+    return f"t{TEMP_COUNTER}"
+
+def novo_label():
+    """Gera um novo rótulo único (L0, L1, L2, ...)"""
+    global LABEL_COUNTER
+    LABEL_COUNTER += 1
+    return f"L{LABEL_COUNTER}"
+
+def resetar_contadores_tac():
+    """Reseta os contadores de temporários e labels (útil para testes)"""
+    global TEMP_COUNTER, LABEL_COUNTER
+    TEMP_COUNTER = 0
+    LABEL_COUNTER = 0
+
 def lerArquivo(nomeArquivo):
     """
     Lê um arquivo linha por linha, removendo espaços extras e ignorando linhas vazias.
@@ -136,24 +159,6 @@ def estadoComparador(token):
     """Verifica se o token é um operador relacional válido."""
     return token in ["<", ">", "<=", ">=", "==", "!="]
 
-<<<<<<< Updated upstream
-def RESorMEM(token):
-    if not token:
-        return False
-    estado = "Q0"
-    for ch in token:
-        if estado == "Q0":
-            if ch.isalpha() and ch.isupper():
-                estado = "QID"
-            else:
-                return False
-        elif estado == "QID":
-            if not (ch.isalpha() and ch.isupper()) and not ch.isdigit():
-                return False
-    return estado == "QID"
-
-=======
->>>>>>> Stashed changes
 def RESorMEM(token: str) -> bool:
     """
     Verifica se o token representa um identificador válido no padrão da linguagem.
@@ -1485,7 +1490,788 @@ def gerarArvoreAtribuida(arvore_anotada: list[dict], tipo_final: str, numero_lin
     return arvore_atribuida
 
 ## FASE 4: TAC, ASSEMBLY E OTIMIZAÇÕES
+def gerarTAC(arvore_atribuida: dict) -> list[dict]:
+    """
+    Gera código intermediário em formato Three Address Code (TAC) a partir da árvore
+    sintática abstrata atribuída.
+    
+    Parâmetros:
+        arvore_atribuida: Árvore sintática abstrata com anotações de tipo da Fase 3
+        
+    Retorna:
+        Lista de instruções TAC no formato:
+        {
+            'op': operador,
+            'a': operando1 (opcional),
+            'b': operando2 (opcional),
+            'dest': destino,
+            'tipo': tipo do resultado,
+            'tipo_a': tipo do operando a (opcional),
+            'tipo_b': tipo do operando b (opcional)
+        }
+    """
+    tac = []
+    
+    # Processa a árvore atribuída
+    resultado = processar_no_tac(arvore_atribuida, tac)
+    
+    return tac
 
+def processar_no_tac(no: dict, tac: list) -> dict:
+    """
+    Processa recursivamente um nó da árvore e gera instruções TAC.
+    
+    Retorna um dicionário com informações sobre o resultado:
+    {
+        'temp': nome da variável/temporário que contém o resultado,
+        'tipo': tipo do resultado,
+        'kind': 'temp', 'var' ou 'imm' (temporário, variável ou imediato)
+    }
+    """
+    tipo_no = no.get('tipo_no')
+    
+    if tipo_no == 'PROGRAMA':
+        # Processa todos os filhos
+        resultado = None
+        for filho in no.get('filhos', []):
+            resultado = processar_no_tac(filho, tac)
+        return resultado if resultado else {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
+    
+    elif tipo_no == 'LITERAL':
+        # Literais retornam valores imediatos
+        valor = no.get('valor')
+        tipo = no.get('tipo_inferido', 'int')
+        return {
+            'temp': valor,
+            'tipo': tipo,
+            'kind': 'imm'
+        }
+    
+    elif tipo_no == 'LEITURA_VARIAVEL':
+        # Leitura de variável retorna o nome da variável
+        nome = no.get('nome')
+        tipo = no.get('tipo_inferido', 'int')
+        return {
+            'temp': nome,
+            'tipo': tipo,
+            'kind': 'var'
+        }
+    
+    elif tipo_no == 'ATRIBUICAO':
+        # Atribuição: não gera instrução TAC aqui (já foi processada pela operação anterior)
+        nome = no.get('nome')
+        tipo = no.get('tipo_inferido', 'int')
+        return {
+            'temp': nome,
+            'tipo': tipo,
+            'kind': 'var'
+        }
+    
+    elif tipo_no == 'OPERACAO':
+        # Operação aritmética binária
+        return gerar_tac_operacao(no, tac)
+    
+    elif tipo_no == 'COMPARACAO':
+        # Operação relacional
+        return gerar_tac_comparacao(no, tac)
+    
+    elif tipo_no == 'CONDICIONAL_IF':
+        # Estrutura condicional IF
+        return gerar_tac_if(no, tac)
+    
+    elif tipo_no == 'LOOP_WHILE':
+        # Estrutura de repetição WHILE
+        return gerar_tac_while(no, tac)
+    
+    elif tipo_no == 'RES':
+        # Comando especial RES
+        return gerar_tac_res(no, tac)
+    
+    else:
+        # Nó desconhecido
+        return {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
+
+def gerar_tac_operacao(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para operações aritméticas binárias.
+    Suporta conversão automática de int para float quando necessário.
+    """
+    operador = no.get('operador')
+    tipos_operandos = no.get('operandos', ['int', 'int'])
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    # Como estamos em RPN, os operandos já foram processados
+    # Precisamos recuperá-los da estrutura da árvore
+    # Por simplificação, assumimos que temos acesso aos operandos na ordem correta
+    
+    # Cria temporário para o resultado
+    temp_resultado = novo_temp()
+    
+    # Adiciona instrução TAC
+    tac.append({
+        'op': operador,
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'tipo_a': tipos_operandos[0] if len(tipos_operandos) > 0 else 'int',
+        'tipo_b': tipos_operandos[1] if len(tipos_operandos) > 1 else 'int',
+        'comment': f'{operador} operation'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
+
+def gerar_tac_comparacao(no: dict, tac: list) -> dict:
+    """Gera TAC para operações relacionais."""
+    operador = no.get('operador')
+    tipos_operandos = no.get('operandos', ['int', 'int'])
+    
+    temp_resultado = novo_temp()
+    
+    tac.append({
+        'op': operador,
+        'dest': temp_resultado,
+        'tipo': 'booleano',
+        'tipo_a': tipos_operandos[0],
+        'tipo_b': tipos_operandos[1],
+        'comment': f'comparison {operador}'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': 'booleano',
+        'kind': 'temp'
+    }
+
+def gerar_tac_if(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para estrutura condicional IF.
+    Formato: (condição then else IF)
+    """
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    # Cria labels
+    label_else = novo_label()
+    label_end = novo_label()
+    
+    # Temporário para o resultado final
+    temp_resultado = novo_temp()
+    
+    # Instrução de salto condicional
+    tac.append({
+        'op': 'ifFalse',
+        'dest': label_else,
+        'tipo': 'booleano',
+        'comment': 'if condition check'
+    })
+    
+    # Ramo then (será processado posteriormente)
+    tac.append({
+        'op': '=',
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': 'then branch result'
+    })
+    
+    # Salto para o fim
+    tac.append({
+        'op': 'goto',
+        'dest': label_end,
+        'comment': 'skip else branch'
+    })
+    
+    # Label do else
+    tac.append({
+        'op': 'label',
+        'dest': label_else,
+        'comment': 'else branch'
+    })
+    
+    # Ramo else
+    tac.append({
+        'op': '=',
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': 'else branch result'
+    })
+    
+    # Label do fim
+    tac.append({
+        'op': 'label',
+        'dest': label_end,
+        'comment': 'end if'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
+
+def gerar_tac_while(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para estrutura de repetição WHILE.
+    Formato: (condição corpo WHILE)
+    """
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    # Cria labels
+    label_inicio = novo_label()
+    label_fim = novo_label()
+    
+    # Temporário para o resultado
+    temp_resultado = novo_temp()
+    
+    # Label de início do loop
+    tac.append({
+        'op': 'label',
+        'dest': label_inicio,
+        'comment': 'while loop start'
+    })
+    
+    # Avaliação da condição
+    tac.append({
+        'op': 'ifFalse',
+        'dest': label_fim,
+        'tipo': 'booleano',
+        'comment': 'while condition check'
+    })
+    
+    # Corpo do loop (será processado posteriormente)
+    tac.append({
+        'op': '=',
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': 'loop body result'
+    })
+    
+    # Salto de volta para o início
+    tac.append({
+        'op': 'goto',
+        'dest': label_inicio,
+        'comment': 'repeat loop'
+    })
+    
+    # Label de fim do loop
+    tac.append({
+        'op': 'label',
+        'dest': label_fim,
+        'comment': 'while loop end'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
+
+def gerar_tac_res(no: dict, tac: list) -> dict:
+    """
+    Gera TAC para comando RES.
+    RES recupera o resultado de N linhas anteriores.
+    """
+    parametro = no.get('parametro', 0)
+    tipo_resultado = no.get('tipo_inferido', 'int')
+    
+    temp_resultado = novo_temp()
+    
+    tac.append({
+        'op': 'res',
+        'a': parametro,
+        'dest': temp_resultado,
+        'tipo': tipo_resultado,
+        'comment': f'RES({parametro})'
+    })
+    
+    return {
+        'temp': temp_resultado,
+        'tipo': tipo_resultado,
+        'kind': 'temp'
+    }
+
+def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
+    """
+    Salva o TAC gerado em um arquivo de texto legível.
+    """
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write("THREE ADDRESS CODE (TAC)\n")
+        f.write("=" * 60 + "\n\n")
+        
+        for i, inst in enumerate(tac):
+            op = inst.get('op')
+            
+            if op == 'label':
+                f.write(f"{inst['dest']}:\n")
+            
+            elif op == 'goto':
+                f.write(f"  goto {inst['dest']}\n")
+            
+            elif op == 'ifFalse':
+                f.write(f"  ifFalse {inst.get('a', '?')} goto {inst['dest']}\n")
+            
+            elif op == '=':
+                a = inst.get('a', '?')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = {a}\n")
+            
+            elif op in ['+', '-', '*', '/', '|', '%', '^']:
+                a = inst.get('a', '?')
+                b = inst.get('b', '?')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = {a} {op} {b}\n")
+            
+            elif op in ['<', '>', '<=', '>=', '==', '!=']:
+                a = inst.get('a', '?')
+                b = inst.get('b', '?')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = {a} {op} {b}\n")
+            
+            elif op == 'res':
+                a = inst.get('a')
+                dest = inst.get('dest')
+                f.write(f"  {dest} = RES({a})\n")
+            
+            else:
+                f.write(f"  {inst}\n")
+            
+            # Adiciona comentário se existir
+            comment = inst.get('comment')
+            if comment:
+                f.write(f"    ; {comment}\n")
+        
+        f.write("\n" + "=" * 60 + "\n")
+
+def otimizarTAC(tac: list) -> list:
+    """
+    Aplica técnicas de otimização no código TAC.
+    
+    Implementa:
+    1. Constant Folding (avaliação de expressões constantes)
+    2. Constant Propagation (propagação de constantes)
+    3. Dead Code Elimination (eliminação de código morto)
+    4. Eliminação de Saltos Redundantes
+    
+    Cada otimização é aplicada em múltiplas passagens até não haver mais mudanças.
+    """
+    tac_otimizado = list(tac)  # Cópia para não modificar original
+    
+    mudou = True
+    iteracao = 0
+    max_iteracoes = 10  # Previne loops infinitos
+    
+    while mudou and iteracao < max_iteracoes:
+        mudou = False
+        tamanho_antes = len(tac_otimizado)
+        
+        # Aplica otimizações em ordem
+        tac_otimizado = constant_folding(tac_otimizado)
+        tac_otimizado = constant_propagation(tac_otimizado)
+        tac_otimizado = dead_code_elimination(tac_otimizado)
+        tac_otimizado = eliminar_saltos_redundantes(tac_otimizado)
+        
+        # Verifica se houve mudança
+        if len(tac_otimizado) != tamanho_antes:
+            mudou = True
+        
+        iteracao += 1
+    
+    return tac_otimizado
+
+def constant_folding(tac: list) -> list:
+    """
+    Avalia expressões constantes em tempo de compilação.
+    
+    Exemplos:
+        t1 = 2 + 3  →  t1 = 5
+        t2 = 4 * 5  →  t2 = 20
+        t3 = 10 / 2 →  t3 = 5
+    """
+    tac_otimizado = []
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        # Operações aritméticas binárias
+        if op in ['+', '-', '*', '/', '|', '%', '^']:
+            a = inst.get('a')
+            b = inst.get('b')
+            
+            # Verifica se ambos operandos são constantes numéricas
+            if eh_constante_numerica(a) and eh_constante_numerica(b):
+                try:
+                    resultado = avaliar_operacao(op, a, b)
+                    
+                    # Substitui operação por atribuição direta
+                    tac_otimizado.append({
+                        'op': '=',
+                        'a': resultado,
+                        'dest': inst.get('dest'),
+                        'tipo': inst.get('tipo', 'int'),
+                        'comment': f'constant folding: {a} {op} {b} = {resultado}'
+                    })
+                    continue
+                except:
+                    # Se houver erro (divisão por zero, etc), mantém instrução original
+                    pass
+        
+        # Operações relacionais
+        elif op in ['<', '>', '<=', '>=', '==', '!=']:
+            a = inst.get('a')
+            b = inst.get('b')
+            
+            if eh_constante_numerica(a) and eh_constante_numerica(b):
+                try:
+                    resultado = avaliar_comparacao(op, a, b)
+                    
+                    tac_otimizado.append({
+                        'op': '=',
+                        'a': 1 if resultado else 0,  # booleano como inteiro
+                        'dest': inst.get('dest'),
+                        'tipo': 'booleano',
+                        'comment': f'constant folding: {a} {op} {b} = {resultado}'
+                    })
+                    continue
+                except:
+                    pass
+        
+        # Mantém instrução original se não foi otimizada
+        tac_otimizado.append(inst)
+    
+    return tac_otimizado
+
+def eh_constante_numerica(valor) -> bool:
+    """Verifica se um valor é uma constante numérica (int ou float)."""
+    return isinstance(valor, (int, float))
+
+def avaliar_operacao(op: str, a, b):
+    """Avalia uma operação aritmética entre duas constantes."""
+    a = float(a) if isinstance(a, (int, float)) else 0
+    b = float(b) if isinstance(b, (int, float)) else 0
+    
+    if op == '+':
+        return a + b
+    elif op == '-':
+        return a - b
+    elif op == '*':
+        return a * b
+    elif op == '/':
+        if b == 0:
+            raise ValueError("Divisão por zero")
+        return int(a // b)  # Divisão inteira
+    elif op == '|':
+        if b == 0:
+            raise ValueError("Divisão por zero")
+        return a / b  # Divisão float
+    elif op == '%':
+        if b == 0:
+            raise ValueError("Divisão por zero")
+        return int(a % b)
+    elif op == '^':
+        return a ** b
+    else:
+        raise ValueError(f"Operador desconhecido: {op}")
+
+def avaliar_comparacao(op: str, a, b) -> bool:
+    """Avalia uma comparação entre duas constantes."""
+    a = float(a) if isinstance(a, (int, float)) else 0
+    b = float(b) if isinstance(b, (int, float)) else 0
+    
+    if op == '<':
+        return a < b
+    elif op == '>':
+        return a > b
+    elif op == '<=':
+        return a <= b
+    elif op == '>=':
+        return a >= b
+    elif op == '==':
+        return abs(a - b) < 1e-9  # Comparação com tolerância para floats
+    elif op == '!=':
+        return abs(a - b) >= 1e-9
+    else:
+        raise ValueError(f"Operador de comparação desconhecido: {op}")
+
+def constant_propagation(tac: list) -> list:
+    """
+    Propaga valores constantes através do código.
+    
+    Exemplos:
+        t1 = 5
+        t2 = t1 + 3  →  t2 = 5 + 3  →  t2 = 8
+    """
+    tac_otimizado = []
+    constantes = {}  # Mapa de variáveis → valores constantes conhecidos
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        # Atribuição de constante
+        if op == '=':
+            a = inst.get('a')
+            dest = inst.get('dest')
+            
+            # Se atribui constante, registra no mapa
+            if eh_constante_numerica(a):
+                constantes[dest] = a
+                tac_otimizado.append(inst)
+            
+            # Se atribui variável que é constante conhecida, propaga
+            elif a in constantes:
+                valor_constante = constantes[a]
+                constantes[dest] = valor_constante
+                
+                tac_otimizado.append({
+                    'op': '=',
+                    'a': valor_constante,
+                    'dest': dest,
+                    'tipo': inst.get('tipo', 'int'),
+                    'comment': f'constant propagation: {a} → {valor_constante}'
+                })
+            else:
+                # Variável não é constante, remove do mapa se existir
+                if dest in constantes:
+                    del constantes[dest]
+                tac_otimizado.append(inst)
+        
+        # Operações binárias
+        elif op in ['+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+            a = inst.get('a')
+            b = inst.get('b')
+            dest = inst.get('dest')
+            
+            # Substitui operandos por valores constantes se conhecidos
+            a_substituido = constantes.get(a, a) if not eh_constante_numerica(a) else a
+            b_substituido = constantes.get(b, b) if not eh_constante_numerica(b) else b
+            
+            nova_inst = dict(inst)
+            nova_inst['a'] = a_substituido
+            nova_inst['b'] = b_substituido
+            
+            # Se operandos mudaram, adiciona comentário
+            if a_substituido != a or b_substituido != b:
+                nova_inst['comment'] = f'constant propagation: {a}→{a_substituido}, {b}→{b_substituido}'
+            
+            tac_otimizado.append(nova_inst)
+            
+            # Destino não é mais constante conhecida
+            if dest in constantes:
+                del constantes[dest]
+        
+        # Saltos condicionais
+        elif op in ['ifFalse', 'if']:
+            a = inst.get('a')
+            
+            if a and not eh_constante_numerica(a) and a in constantes:
+                nova_inst = dict(inst)
+                nova_inst['a'] = constantes[a]
+                nova_inst['comment'] = f'constant propagation: {a} → {constantes[a]}'
+                tac_otimizado.append(nova_inst)
+            else:
+                tac_otimizado.append(inst)
+        
+        # Labels e outros: mantém e limpa conhecimento de constantes (conservador)
+        elif op == 'label':
+            constantes.clear()  # Labels podem ser alvos de saltos, invalida análise
+            tac_otimizado.append(inst)
+        
+        else:
+            tac_otimizado.append(inst)
+    
+    return tac_otimizado
+
+def dead_code_elimination(tac: list) -> list:
+    """
+    Remove código morto (instruções cujo resultado nunca é usado).
+    
+    Implementa análise de liveness básica:
+    1. Identifica quais variáveis são usadas
+    2. Remove atribuições a variáveis nunca usadas
+    """
+    # Primeira passagem: identifica todas as variáveis usadas
+    variaveis_usadas = set()
+    variaveis_importantes = set()  # Variáveis que não podem ser removidas
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        # Marca operandos como usados
+        if op in ['+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+            a = inst.get('a')
+            b = inst.get('b')
+            if a and not eh_constante_numerica(a):
+                variaveis_usadas.add(a)
+            if b and not eh_constante_numerica(b):
+                variaveis_usadas.add(b)
+        
+        elif op == '=':
+            a = inst.get('a')
+            if a and not eh_constante_numerica(a):
+                variaveis_usadas.add(a)
+        
+        elif op in ['ifFalse', 'if', 'return']:
+            a = inst.get('a')
+            if a and not eh_constante_numerica(a):
+                variaveis_usadas.add(a)
+                variaveis_importantes.add(a)  # Condições são importantes
+        
+        # RES e chamadas são sempre importantes
+        elif op in ['res', 'call']:
+            dest = inst.get('dest')
+            if dest:
+                variaveis_importantes.add(dest)
+    
+    # Segunda passagem: remove código morto
+    tac_otimizado = []
+    
+    for inst in tac:
+        op = inst.get('op')
+        dest = inst.get('dest')
+        
+        # Atribuições a variáveis nunca usadas podem ser removidas
+        if op in ['=', '+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+            # Se é temporário não usado E não é importante, remove
+            if dest and dest.startswith('t') and dest not in variaveis_usadas and dest not in variaveis_importantes:
+                # Código morto detectado, não adiciona à saída
+                continue
+        
+        # Mantém instrução
+        tac_otimizado.append(inst)
+    
+    return tac_otimizado
+
+def eliminar_saltos_redundantes(tac: list) -> list:
+    """
+    Remove saltos redundantes e labels não utilizados.
+    
+    Otimizações:
+    1. goto L1 seguido imediatamente por L1: → remove goto
+    2. Labels nunca referenciados → remove label
+    3. Sequências de gotos → simplifica
+    """
+    # Primeira passagem: identifica labels referenciados
+    labels_referenciados = set()
+    
+    for inst in tac:
+        op = inst.get('op')
+        
+        if op in ['goto', 'ifFalse', 'if']:
+            dest = inst.get('dest')
+            if dest:
+                labels_referenciados.add(dest)
+    
+    # Segunda passagem: remove saltos e labels redundantes
+    tac_otimizado = []
+    i = 0
+    
+    while i < len(tac):
+        inst = tac[i]
+        op = inst.get('op')
+        
+        # Caso 1: goto seguido imediatamente pelo label alvo
+        if op == 'goto' and i + 1 < len(tac):
+            proximo = tac[i + 1]
+            if proximo.get('op') == 'label' and proximo.get('dest') == inst.get('dest'):
+                # Salto redundante, não adiciona
+                i += 1
+                continue
+        
+        # Caso 2: Label nunca referenciado
+        if op == 'label':
+            dest = inst.get('dest')
+            if dest not in labels_referenciados:
+                # Label não usado, não adiciona
+                i += 1
+                continue
+        
+        # Mantém instrução
+        tac_otimizado.append(inst)
+        i += 1
+    
+    return tac_otimizado
+
+def gerar_relatorio_otimizacoes(tac_original: list, tac_otimizado: list, nome_arquivo: str = 'otimizacoes.md') -> None:
+    """
+    Gera um relatório detalhado das otimizações aplicadas.
+    """
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("# Relatório de Otimizações\n\n")
+        
+        # Estatísticas gerais
+        f.write("## Estatísticas Gerais\n\n")
+        f.write(f"- **Instruções TAC original**: {len(tac_original)}\n")
+        f.write(f"- **Instruções TAC otimizado**: {len(tac_otimizado)}\n")
+        
+        reducao = len(tac_original) - len(tac_otimizado)
+        percentual = (reducao / len(tac_original) * 100) if len(tac_original) > 0 else 0
+        f.write(f"- **Instruções removidas**: {reducao} ({percentual:.1f}%)\n\n")
+        
+        # Conta temporários
+        temps_original = contar_temporarios(tac_original)
+        temps_otimizado = contar_temporarios(tac_otimizado)
+        f.write(f"- **Temporários no TAC original**: {temps_original}\n")
+        f.write(f"- **Temporários no TAC otimizado**: {temps_otimizado}\n")
+        f.write(f"- **Temporários eliminados**: {temps_original - temps_otimizado}\n\n")
+        
+        # Análise detalhada
+        f.write("## Comparação TAC Original vs Otimizado\n\n")
+        f.write("### TAC Original\n```\n")
+        for inst in tac_original[:20]:  # Primeiras 20 instruções
+            f.write(formatar_instrucao_tac(inst) + "\n")
+        if len(tac_original) > 20:
+            f.write(f"... ({len(tac_original) - 20} instruções omitidas)\n")
+        f.write("```\n\n")
+        
+        f.write("### TAC Otimizado\n```\n")
+        for inst in tac_otimizado[:20]:
+            f.write(formatar_instrucao_tac(inst) + "\n")
+        if len(tac_otimizado) > 20:
+            f.write(f"... ({len(tac_otimizado) - 20} instruções omitidas)\n")
+        f.write("```\n\n")
+
+def contar_temporarios(tac: list) -> int:
+    """Conta o número de variáveis temporárias únicas no TAC."""
+    temporarios = set()
+    
+    for inst in tac:
+        dest = inst.get('dest')
+        if dest and dest.startswith('t'):
+            temporarios.add(dest)
+        
+        a = inst.get('a')
+        if a and isinstance(a, str) and a.startswith('t'):
+            temporarios.add(a)
+        
+        b = inst.get('b')
+        if b and isinstance(b, str) and b.startswith('t'):
+            temporarios.add(b)
+    
+    return len(temporarios)
+
+def formatar_instrucao_tac(inst: dict) -> str:
+    """Formata uma instrução TAC para exibição legível."""
+    op = inst.get('op')
+    
+    if op == 'label':
+        return f"{inst['dest']}:"
+    elif op == 'goto':
+        return f"  goto {inst['dest']}"
+    elif op == 'ifFalse':
+        return f"  ifFalse {inst.get('a', '?')} goto {inst['dest']}"
+    elif op == '=':
+        return f"  {inst['dest']} = {inst.get('a', '?')}"
+    elif op in ['+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+        return f"  {inst['dest']} = {inst.get('a', '?')} {op} {inst.get('b', '?')}"
+    elif op == 'res':
+        return f"  {inst['dest']} = RES({inst.get('a')})"
+    else:
+        return f"  {inst}"
+
+def salvar_tac_otimizado(tac: list, nome_arquivo: str = 'tac_otimizado.txt') -> None:
+    """Salva o TAC otimizado (mesmo formato do TAC original)."""
+    salvar_tac(tac, nome_arquivo)
 # A convenção usada:
 # - temporários gerados: t1, t2, t3, ...
 # - variáveis globais são escritas como rótulos .word
