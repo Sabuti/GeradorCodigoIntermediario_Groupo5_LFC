@@ -136,6 +136,7 @@ def estadoComparador(token):
     """Verifica se o token é um operador relacional válido."""
     return token in ["<", ">", "<=", ">=", "==", "!="]
 
+<<<<<<< Updated upstream
 def RESorMEM(token):
     if not token:
         return False
@@ -151,6 +152,8 @@ def RESorMEM(token):
                 return False
     return estado == "QID"
 
+=======
+>>>>>>> Stashed changes
 def RESorMEM(token: str) -> bool:
     """
     Verifica se o token representa um identificador válido no padrão da linguagem.
@@ -1498,20 +1501,8 @@ def int_to_q8_8_integer(value_float):
     # converte float -> Q8.8 int (arredonda)
     return int(round(value_float * 256.0))
 
-def gerarTAC(arvore_atribuida):
-    pass
-
-def otimizarTAC(tac):
-    pass
-
 # -------------------------
 # Gerador de Assembly (contém rotinas UART e print hex)
-PROLOGO = """
-    .include "m328pdef.inc"
-    .cseg
-    .org 0x0000
-    rjmp main
-"""
 
 EPILOGO = """
 ; fim do programa - trava
@@ -1521,7 +1512,6 @@ fim:
 
 # seção dados e helpers
 def mapear_variaveis(tac, tabela_simbolos):
-    """Mapeia variáveis com seus tipos (int ou float/Q8.8)"""
     vars_map = {}
     for inst in tac:
         for campo in ["a", "b", "dest"]:
@@ -1529,11 +1519,9 @@ def mapear_variaveis(tac, tabela_simbolos):
                 val = inst[campo]
                 if isinstance(val, str) and not val.startswith('label_'):
                     if val not in vars_map:
-                        # Busca tipo na tabela de símbolos
-                        info = tabela_simbolos.get(val)
-                        tipo = info['tipo'] if info else inst.get('tipo', 'int')
-                        vars_map[val] = {'tipo': tipo, 'storage': '.word 0'}
+                        vars_map[val] = f"{val}: .word 0"
     return vars_map
+
 
 def gerar_secao_dados(vars_map):
     saida = [".dseg", ".org 0x0100"]  # coloca dados na SRAM? OBS: .dseg+labels: Para .s puro com .data, isso é simplista.
@@ -1642,211 +1630,38 @@ pow_end:
 
 # Routines UART / print hex (16-bit)
 ROTINAS_UART = r"""
-; ----------------------------
-; UART routines (9600 @ 16MHz)
-; ----------------------------
-
 UART_init:
-    ; Set baud 9600 @16MHz: UBRR0 = 103
     ldi r16, 0
     sts UBRR0H, r16
-    ldi r16, 103
+    ldi r16, 103              ; baud 9600 para 16MHz
     sts UBRR0L, r16
-    ; enable TX
-    ldi r16, (1<<TXEN0)
+    ldi r16, (1<<TXEN0)       ; ativa transmissor
     sts UCSR0B, r16
-    ; frame: 8-bit
-    ldi r16, (1<<UCSZ01)|(1<<UCSZ00)
+    ldi r16, (1<<UCSZ01)|(1<<UCSZ00) ; 8N1
     sts UCSR0C, r16
     ret
 
-; send byte in r24
 UART_sendByte:
 WaitTX:
     lds r18, UCSR0A
-    sbrc r18, UDRE0
-    rjmp UART_send_send
+    sbrc r18, 5               ; UDRE0 bit 5 = buffer vazio?
+    rjmp UART_doSend
     rjmp WaitTX
-UART_send_send:
+UART_doSend:
     sts UDR0, r24
     ret
 
-; print string pointed by Z (flash) - uses lpm
-UART_printString:
-    ; Z must point to string in flash (with terminating 0)
-PrintLoop:
-    lpm r24, Z+
-    tst r24
-    breq PrintEnd
-    rcall UART_sendByte
-    rjmp PrintLoop
-PrintEnd:
-    ret
-
-; print one hex nibble in r24 (lower 4 bits)
 UART_printHexNibble:
     andi r24, 0x0F
     cpi r24, 10
-    brlo HexIsDigit
-    ; A-F
+    brlo DigitHex
     subi r24, 10
-    ldi r25, ord_A  ; ord_A é preenchido por tabela de dados
-    add r24, r25
-    rcall UART_sendByte
-    ret
-HexIsDigit:
-    ldi r25, ord_0
-    add r24, r25
-    rcall UART_sendByte
-    ret
-
-; print byte in r24 as two hex chars
-UART_printHex8:
-    push r18
-    push r19
-    mov r19, r24
-    ; high nibble: swap -> low nibble contains high nibble
-    swap r24
-    andi r24, 0x0F
-    rcall UART_printHexNibble
-    ; low nibble: original low nibble
-    mov r24, r19
-    andi r24, 0x0F
-    rcall UART_printHexNibble
-    pop r19
-    pop r18
-    ret
-
-; print 16-bit value in r24:r25 (r25 high)
-UART_printHex16:
-    ; print high byte then low byte
-    push r18
-    push r19
-    mov r24, r25
-    rcall UART_printHex8
-    mov r24, r24 ; no-op to ensure sequencing
-    mov r24, r24
-    mov r24, r24
-    mov r24, r24
-    mov r24, r24
-    mov r24, r24
-    mov r24, r24
-    ; now low byte
-    mov r24, r24 ; placeholder
-    mov r24, r24
-    mov r24, r24
-    ; actually use r24 = low byte
-    mov r24, r24
-    mov r24, r24
-    pop r19
-    pop r18
-    ; simpler approach: caller must place low byte into r24 and call UART_printHex8
-    ret
-
-; Data constants for ASCII offsets
-; We'll create labels for '0' and 'A' values used by UART_printHexNibble:
-"""
-
-# Because inline assembly macros like ldi r25, ord_A are not defined,
-# we'll append ASCII constants in .data and modify UART_printHexNibble to load from those addresses.
-ROTINAS_UART_DATA = """
-    .data
-ord_0: .byte 48
-ord_A: .byte 65
-    .text
-"""
-
-# A safer implementation: implement UART_printHexNibble using immediate compares and adds,
-# without referencing ord_0/ord_A memory (to avoid complications). We'll rewrite a clean version here:
-
-ROTINAS_UART_CLEAN = r"""
-; Clean versions (no data table)
-
-UART_printHexNibble_clean:
-    andi r24, 0x0F
-    cpi r24, 10
-    brlo HexDigit_clean
-    ; A-F: add 'A' - 10 => 65 - 10 = 55
-    subi r24, 10
-    ldi r18, 55
+    ldi r18, 55               ; 'A' - 10
     add r24, r18
     rcall UART_sendByte
     ret
-HexDigit_clean:
-    ldi r18, 48
-    add r24, r18
-    rcall UART_sendByte
-    ret
-
-UART_printHex8_clean:
-    push r18
-    push r19
-    mov r19, r24
-    swap r24
-    andi r24, 0x0F
-    rcall UART_printHexNibble_clean
-    mov r24, r19
-    andi r24, 0x0F
-    rcall UART_printHexNibble_clean
-    pop r19
-    pop r18
-    ret
-
-UART_printHex16_clean:
-    ; caller puts low byte in r24 and high byte in r25
-    push r18
-    push r19
-    mov r24, r25
-    rcall UART_printHex8_clean
-    mov r24, r24 ; nop
-    mov r24, r24
-    mov r24, r24
-    mov r24, r24
-    ; now print low byte
-    mov r24, r24
-    mov r24, r24
-    ; real low byte must be loaded by caller into r24 before call to UART_printHex8_clean
-    ; So we instead expect caller to call UART_printHex8_clean twice:
-    pop r19
-    pop r18
-    ret
-"""
-
-# Given complexity of mixing, we'll keep a minimal usable set:
-ROTINAS_UART_FINAL = r"""
-UART_init:
-    ldi r16, 0
-    sts UBRR0H, r16
-    ldi r16, 103
-    sts UBRR0L, r16
-    ldi r16, (1<<TXEN0)
-    sts UCSR0B, r16
-    ldi r16, (1<<UCSZ01)|(1<<UCSZ00)
-    sts UCSR0C, r16
-    ret
-
-UART_sendByte:
-WaitTX2:
-    lds r18, UCSR0A
-    sbrc r18, UDRE0
-    rjmp UART_send_send2
-    rjmp WaitTX2
-UART_send_send2:
-    sts UDR0, r24
-    ret
-
-;print nibble (r24 low 4 bits)
-UART_printHexNibble2:
-    andi r24, 0x0F
-    cpi r24, 10
-    brlo H2_digit
-    subi r24, 10
-    ldi r18, 55   ; 'A' - 10 = 65 - 10 = 55
-    add r24, r18
-    rcall UART_sendByte
-    ret
-H2_digit:
-    ldi r18, 48
+DigitHex:
+    ldi r18, 48               ; '0'
     add r24, r18
     rcall UART_sendByte
     ret
@@ -1854,42 +1669,35 @@ H2_digit:
 UART_printHex8:
     push r18
     push r19
-    mov r19, r24
+    mov r19, r24              ; salva original
     swap r24
     andi r24, 0x0F
-    rcall UART_printHexNibble2
+    rcall UART_printHexNibble
     mov r24, r19
     andi r24, 0x0F
-    rcall UART_printHexNibble2
+    rcall UART_printHexNibble
     pop r19
     pop r18
     ret
 
 UART_printHex16:
-    ; input: r24 = low byte, r25 = high byte
     push r18
     push r19
+    ; High byte
     mov r24, r25
     rcall UART_printHex8
-    ldi r24, 0x20  ; space separator
+    ; Espaço
+    ldi r24, ' '
     rcall UART_sendByte
-    mov r24, r24    ; nop
-    mov r24, r24
-    mov r24, r24
-    ; low byte
-    mov r24, r24
-    ; actual low byte is in r24 already? Not reliable, so caller should:
-    ; Caller will move low byte into r24 and call UART_printHex8 directly.
+    ; Low byte
+    rcall UART_printHex8
     pop r19
     pop r18
     ret
+
 """
 
 ROTINA_PRINT_Q8_8 = r"""
-; ============================================================================
-; Print Q8.8 como decimal (valor/256.0)
-; Input: r24:r25 = valor Q8.8 (little endian)
-; ============================================================================
 UART_printQ8_8:
     push r18
     push r19
@@ -1989,10 +1797,6 @@ print_uni:
     pop r18
     ret
 """
-
-# For clarity, we'll implement in gerarAssembly a simple call sequence:
-# - to print 16-bit value v: load low into r24, high into r25, call UART_printHex8 (with r24=low) then move r24=r25 and call UART_printHex8
-# Simpler: we'll implement the sequence in Python emitted assembly directly (no reliance on UART_printHex16).
 
 # Tradução de instrução TAC para assembly
 def traduzirInstrucaoTAC(inst):
@@ -2174,9 +1978,9 @@ def traduzirPrint(inst):
 # Geração de Código Assembly completo
 def gerarAssembly(tacOtimizado, tabela_simbolos):
     assembly = []
-    assembly.append(PROLOGO)
+    assembly.append(".equ RAMEND, 0x08FF")  # exemplo para ATmega328P
     # inicialização de pilha (prologue runtime)
-    assembly.append("main:\n    ; inicializa pilha\n    ldi r16, HIGH(RAMEND)\n    out SPH, r16\n    ldi r16, LOW(RAMEND)\n    out SPL, r16\n    rcall UART_init\n")
+    assembly.append("main:\n    ; inicializa pilha\n    ldi r16, hi8(RAMEND)\n    out SPH, r16\n    ldi r16, lo8(RAMEND)\n    out SPL, r16\n    rcall UART_init\n")
 
     # Criar mapa de variáveis para memória estática
     variaveis = mapear_variaveis(tacOtimizado, tabela_simbolos)
@@ -2191,8 +1995,6 @@ def gerarAssembly(tacOtimizado, tabela_simbolos):
     # epílogo e trava
     assembly.append(EPILOGO)
 
-    # acrescenta rotinas UART (clean final)
-    assembly.append(ROTINAS_UART_FINAL)
     # e rotina print8/printNibble
     assembly.append("""
 ; UART_printHex8 expects byte in r24
@@ -2200,9 +2002,9 @@ def gerarAssembly(tacOtimizado, tabela_simbolos):
 """)
     # salvar em arquivo
     texto = "\n".join(assembly)
-    with open("saida.s", "w", encoding="utf-8") as f:
+    with open("./src/saida.s", "w", encoding="utf-8") as f:
         f.write(texto)
-    print("Arquivo Assembly gerado: saida.s")
+    print("Arquivo Assembly gerado: saida.s no /src/")
     return assembly
 
 def main():
