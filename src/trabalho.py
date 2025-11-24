@@ -2306,17 +2306,14 @@ def mapear_variaveis(tac, tabela_simbolos):
                 val = inst[campo]
                 if isinstance(val, str) and not val.startswith('label_'):
                     if val not in vars_map:
-                        vars_map[val] = f"{val}: .word 0"
+                        vars_map[val] = f" .word 0"
     return vars_map
 
-
 def gerar_secao_dados(vars_map):
-    saida = [".dseg", ".org 0x0100"]  # coloca dados na SRAM? OBS: .dseg+labels: Para .s puro com .data, isso é simplista.
-    # Para compatibilidade com avr-gcc, geraremos .data no formato simples:
-    # Porém .s e .include podem aceitar .data/.text; usamos versão simples:
-    data_lines = [".data"]
-    for nome, tipo in vars_map.items():
-        data_lines.append(f"{nome}:\t{tipo}")
+    #data_lines = [".data"]
+    data_lines = [""] # por enquanto sem seção .data
+    #for nome, tipo in vars_map.items():
+    #    data_lines.append(f"{nome}:\t{tipo}")
     data_lines.append(".text")
     return "\n".join(data_lines)
 
@@ -2600,6 +2597,8 @@ def traduzirInstrucaoTAC(inst):
         return traduzirIfGoto(inst)
     elif op == "print":
         return traduzirPrint(inst)
+    elif op == "ifFalse":
+        return traduzirIfFalse(inst)
     else:
         return f"; [ERRO] operação TAC não reconhecida: {op}\n"
     
@@ -2734,6 +2733,15 @@ def traduzirIfGoto(inst):
     destino = inst.get("dest")
     return f"\n    lds r16, {cond}\n    cpi r16, 0\n    brne {destino}\n"
 
+def traduzirIfFalse(inst):
+    cond = inst.get("a")
+    destino = inst.get("dest")
+
+    codigo  = f"\n    lds r16, {cond}\n"   # carrega variável
+    codigo += f"    cpi r16, 0\n"         # compara com zero
+    codigo += f"    breq {destino}\n"     # se for zero, pula
+    return codigo
+
 def traduzirPrint(inst):
     """Imprime valor com formatação correta (hex para int, decimal para float)"""
     A = inst.get("a")
@@ -2766,8 +2774,22 @@ def traduzirPrint(inst):
 def gerarAssembly(tacOtimizado, tabela_simbolos):
     assembly = []
     assembly.append(".equ RAMEND, 0x08FF")  # exemplo para ATmega328P
+    assembly.append(".equ SPL, 0x3D")
+    assembly.append(".equ SPH, 0x3E")
+    assembly.append(".equ TXEN0, 0x03")
+    assembly.append(".equ UBRR0H, 0xC5")
+    assembly.append(".equ UBRR0L, 0xC4")
+    assembly.append(".equ UCSR0A, 0xC0")
+    assembly.append(".equ UCSR0B, 0xC1")
+    assembly.append(".equ UCSR0C, 0xC2")
+    assembly.append(".equ UCSZ00, 0x01")
+    assembly.append(".equ UCSZ01, 0x02")
+    assembly.append(".equ UDR0, 0xC6")
     # inicialização de pilha (prologue runtime)
-    assembly.append("main:\n    ; inicializa pilha\n    ldi r16, hi8(RAMEND)\n    out SPH, r16\n    ldi r16, lo8(RAMEND)\n    out SPL, r16\n    rcall UART_init\n")
+    assembly.append("\n.global main")
+    assembly.append(ROTINAS_UART)
+    assembly.append(ROTINA_PRINT_Q8_8)
+    assembly.append("\n\nmain:\n    ; inicializa pilha\n    ldi r16, hi8(RAMEND)\n    out SPH, r16\n    ldi r16, lo8(RAMEND)\n    out SPL, r16\n    rcall UART_init\n")
 
     # Criar mapa de variáveis para memória estática
     variaveis = mapear_variaveis(tacOtimizado, tabela_simbolos)
@@ -2782,13 +2804,22 @@ def gerarAssembly(tacOtimizado, tabela_simbolos):
     # epílogo e trava
     assembly.append(EPILOGO)
 
-    # e rotina print8/printNibble
-    assembly.append("""
-; UART_printHex8 expects byte in r24
-; We'll provide an implementation used above: it uses r24 for byte and outputs two hex chars.
-""")
     # salvar em arquivo
     texto = "\n".join(assembly)
+
+    linhas = texto.split("\n")
+    nova = []
+    vistos = set()
+
+    for linha in linhas:
+        if linha.endswith(":"):
+            if linha in vistos:
+                continue
+            vistos.add(linha)
+        nova.append(linha)
+
+    texto = "\n".join(nova)
+
     with open("./src/saida.s", "w", encoding="utf-8") as f:
         f.write(texto)
     print("Arquivo Assembly gerado: saida.s no /src/")
