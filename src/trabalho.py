@@ -159,6 +159,7 @@ def estadoComparador(token):
     """Verifica se o token é um operador relacional válido."""
     return token in ["<", ">", "<=", ">=", "==", "!="]
 
+
 def RESorMEM(token: str) -> bool:
     """
     Verifica se o token representa um identificador válido no padrão da linguagem.
