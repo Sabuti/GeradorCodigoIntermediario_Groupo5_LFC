@@ -1267,17 +1267,15 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int) -> 
             ctx['pilha_valores'].append(None)
             return
 
-        elementos_while = []
-        while ctx['pilha_tipos']:
-            elementos_while.insert(0, ctx['pilha_tipos'].pop())
-            if ctx['pilha_valores']:
-                ctx['pilha_valores'].pop()
+        # Na ordem de empilhamento: corpo (primeiro), condição (segundo)
+        tipo_corpo = ctx['pilha_tipos'].pop()   # Desempilha corpo
+        tipo_cond = ctx['pilha_tipos'].pop()    # Desempilha condição
         
-        # Primeiro elemento = condição
-        tipo_cond = elementos_while[0] if elementos_while else 'desconhecido'
-        
-        # Último elemento = tipo de retorno
-        tipo_corpo = elementos_while[-1] if len(elementos_while) > 1 else 'desconhecido'
+        # Descarta valores
+        if ctx['pilha_valores']:
+            ctx['pilha_valores'].pop()
+        if ctx['pilha_valores']:
+            ctx['pilha_valores'].pop()
         
         if tipo_cond != 'booleano':
             ctx['erros'].append(
@@ -1336,7 +1334,6 @@ def processar_mem_atribuicao(ctx: dict, tokens_proc: list, tabela_simbolos: dict
     })
 
     return tabela_simbolos
-
 
 def processar_mem_leitura(ctx: dict, tokens_proc: list, tabela_simbolos: dict, numero_linha: int) -> dict:
     """
@@ -1606,8 +1603,6 @@ def gerarTAC(arvore_atribuida: dict) -> list[dict]:
     # Processa a árvore atribuída
     processar_no_tac(arvore_atribuida, tac, pilha_resultados)
     return tac
-    
-    
 
 def processar_no_tac(no: dict, tac: list, pilha: list) -> dict:
     """
@@ -1688,7 +1683,7 @@ def processar_no_tac(no: dict, tac: list, pilha: list) -> dict:
         tipo_resultado = no.get('tipo_inferido', 'int')
         temp_resultado = novo_temp()
     
-         #USA OS OPERANDOS REAIS
+        #USA OS OPERANDOS REAIS
         tac.append({
             'op': operador,
             'a': a_info['temp'],  #OPERANDO A
@@ -1912,7 +1907,6 @@ def processar_no_tac(no: dict, tac: list, pilha: list) -> dict:
     else:
         # Nó desconhecido
         return {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
-
 
 def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
     """
@@ -2446,11 +2440,17 @@ def gerar_secao_dados(vars_map):
     return "\n".join(data_lines)
 
 # gerar carregamento de operando
-def load_operand(op, regL, regH):
+def carregar_operando(op, regL, regH):
     """Gera código para mover variável/imediato → registradores (little-endian: low em regL)"""
-    if isinstance(op, int):
-        lo = op & 0xFF
-        hi = (op >> 8) & 0xFF
+    if isinstance(op, (int, float)):
+        # Se for float, converte para IEEE 754
+        if isinstance(op, float):
+            ieee_value = float_to_ieee754_half(op)
+            lo = ieee_value & 0xFF
+            hi = (ieee_value >> 8) & 0xFF
+        else:
+            lo = op & 0xFF
+            hi = (op >> 8) & 0xFF
         return f"\n    ldi {regL}, {lo}\n    ldi {regH}, {hi}\n"
     else:
         # assume label word (little endian)
@@ -2764,32 +2764,405 @@ int_ieee_end:
 """
 
 OPERACOES_IEEE754 = r"""
-; Operações IEEE 754 half-precision (stubs - implementação simplificada)
+; Operações IEEE 754 half-precision - adaptadas à convenção:
+; Temporários: r16..r23
+; Parâmetros/Retorno: r24:r25
+; Entrada para cada binary op: A em r18:r19, B em r20:r21
+; Internamente rotinas usam r22:r23 (A) e r24:r25 (B) como antes;
+; No retorno, resultado ficará em r24:r25.
 
-ieee754_add:
-    ; TODO: Implementar adição IEEE 754 completa
-    ; Por ora, retorna primeiro operando
-    movw r20, r22
+; -----------------------------
+; f16_extract (sem alteração de ABI interna)
+; entrada: r22:r23
+; saídas temporárias usadas: r26..r31
+; retorna:
+;  r26 = sign (0/1)
+;  r27 = exponent (0..31)
+;  r28:r29 = mantissa (10 bits)
+; -----------------------------
+f16_extract:
+    ; r22 = low, r23 = high
+    mov r26, r23
+    andi r26, 0x80
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+
+    mov r27, r23
+    andi r27, 0x7C
+    lsr r27
+    lsr r27
+    lsr r27
+    lsr r27
+    lsr r27
+
+    andi r23, 0x03
+    mov r28, r22
+    mov r29, r23
     ret
 
-ieee754_sub:
-    ; TODO: Implementar subtração IEEE 754
-    movw r20, r22
+; --------------------------------------------------
+; f16_pack (sem alteração importante)
+; Empacota sign (r26), exponent (r27), mantissa r28:r29 -> r22:r23
+; --------------------------------------------------
+f16_pack:
+    mov r30, r27
+    lsl r30
+    lsl r30
+    lsl r30
+    lsl r30
+    lsl r30
+    mov r31, r27
+    lsl r31
+    lsl r31
+    lsl r31
+    lsl r31
+    mov r30, r27
+    lsl r30
+    lsl r30
+    andi r30, 0xF8
+    mov r31, r29
+    andi r31, 0x03
+    lsl r31
+    lsl r31
+    mov r29, r26
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    mov r22, r28
+    mov r23, r30
+    or r23, r31
+    or r23, r29
     ret
 
-ieee754_mul:
-    ; TODO: Implementar multiplicação IEEE 754
-    movw r20, r22
+; --------------------------------------------------
+; f16_add
+; agora: espera A em r18:r19 e B em r20:r21; retorna em r24:r25
+; interna: trabalha em r22:r23 (A) e r24:r25 (B) como antes
+; --------------------------------------------------
+f16_add:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r26
+    push r27
+    push r28
+    push r29
+
+    ; copiar entradas para convenção interna da rotina (r22:r23 = A, r24:r25 = B)
+    mov r22, r18
+    mov r23, r19
+    mov r24, r20
+    mov r25, r21
+
+    ; --- rotina original (sem outras modificações) ---
+    ; save A
+    mov r30, r22
+    mov r31, r23
+    mov r22, r30
+    mov r23, r31
+    rcall f16_extract
+    mov r16, r26
+    mov r17, r27
+    mov r18, r28
+    mov r19, r29
+    mov r22, r24
+    mov r23, r25
+    rcall f16_extract
+    mov r20, r26
+    mov r21, r27
+    mov r22, r28
+    mov r23, r29
+    or r18, r19
+    breq .return_b
+    or r22, r23
+    breq .return_a
+    cp r17, r21
+    brge .align_done
+    mov r26, r16
+    mov r16, r20
+    mov r20, r26
+    mov r26, r17
+    mov r17, r21
+    mov r21, r26
+    mov r26, r18
+    mov r18, r22
+    mov r22, r26
+    mov r26, r19
+    mov r19, r23
+    mov r23, r26
+.align_done:
+    mov r26, r17
+    sub r26, r21
+    tst r26
+    breq .no_shift
+.shift_loop:
+    lsr r22
+    ror r23
+    dec r26
+    brne .shift_loop
+.no_shift:
+    tst r17
+    breq .a_denorm
+    sbi r19, 2
+.a_denorm:
+    tst r21
+    breq .b_denorm
+    sbi r23, 2
+.b_denorm:
+    cp r16, r20
+    breq .do_add
+    mov r26, r19
+    cp r26, r23
+    brne .cmp_done
+    mov r26, r18
+    cp r26, r22
+.cmp_done:
+    brlt .do_sub_swapped
+    sub r18, r22
+    sbc r19, r23
+    mov r16, r16
+    rjmp .normalize
+.do_sub_swapped:
+    sub r22, r18
+    sbc r23, r19
+    mov r18, r22
+    mov r19, r23
+    mov r16, r20
+    rjmp .normalize
+.do_add:
+    add r18, r22
+    adc r19, r23
+    mov r16, r16
+.normalize:
+    ldi r26, 4
+    cp r19, r26
+    brlo .norm_shift_left
+    lsr r18
+    ror r19
+    inc r17
+    rjmp .pack_result
+.norm_shift_left:
+    tst r19
+    brne .pack_result
+    lsl r18
+    rol r19
+    dec r17
+    brne .norm_shift_left
+.pack_result:
+    mov r28, r18
+    mov r29, r19
+    mov r26, r16
+    mov r27, r17
+    mov r22, r28
+    mov r23, r29
+    rcall f16_pack
+    ; resultado está em r22:r23 (interno)
+    ; mover resultado para convenção externa (r24:r25)
+    mov r24, r22
+    mov r25, r23
+    jmp .end
+.return_a:
+    mov r24, r30
+    mov r25, r31
+    jmp .end
+.return_b:
+    mov r24, r24
+    mov r25, r25
+    jmp .end
+.end:
+    pop r29
+    pop r28
+    pop r27
+    pop r26
+    pop r21
+    pop r20
+    pop r19
+    pop r18
     ret
 
-ieee754_div:
-    ; TODO: Implementar divisão IEEE 754
-    movw r20, r22
+; --------------------------------------------------
+; f16_mul
+; espera A em r18:r19, B em r20:r21; retorna em r24:r25
+; --------------------------------------------------
+f16_mul:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r26
+    push r27
+    push r28
+    push r29
+
+    ; copiar entradas
+    mov r22, r18
+    mov r23, r19
+    mov r24, r20
+    mov r25, r21
+
+    ; rotina original (aproximada)
+    mov r30, r22
+    mov r31, r23
+    rcall f16_extract
+    mov r16, r26
+    mov r17, r27
+    mov r18, r28
+    mov r19, r29
+    mov r22, r24
+    mov r23, r25
+    rcall f16_extract
+    mov r20, r26
+    mov r21, r27
+    mov r22, r28
+    mov r23, r29
+    or r18, r19
+    breq .zero_a
+    or r22, r23
+    breq .zero_b
+    eor r16, r20
+    mov r26, r17
+    add r26, r21
+    subi r26, 15
+    sbi r19, 2
+    sbi r23, 2
+    mov r24, r18
+    mov r25, r22
+    mul r24, r25
+    mov r26, r0
+    mov r27, r1
+    clr r0
+    clr r1
+    mov r22, r26
+    mov r23, r27
+    mov r17, r26
+    mov r26, r16
+    mov r28, r22
+    mov r29, r23
+    mov r27, r17
+    rcall f16_pack
+    mov r24, r22
+    mov r25, r23
+    jmp .mul_end
+.zero_a:
+    ldi r24, 0x00
+    ldi r25, 0x00
+    jmp .mul_end
+.zero_b:
+    ldi r24, 0x00
+    ldi r25, 0x00
+.mul_end:
+    pop r29
+    pop r28
+    pop r27
+    pop r26
+    pop r21
+    pop r20
+    pop r19
+    pop r18
     ret
 
-ieee754_pow:
-    ; TODO: Implementar potência IEEE 754
-    movw r20, r22
+; --------------------------------------------------
+; f16_div
+; espera A em r18:r19, B em r20:r21; retorna em r24:r25
+; --------------------------------------------------
+f16_div:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r26
+    push r27
+    push r28
+    push r29
+
+    ; copiar entradas
+    mov r22, r18
+    mov r23, r19
+    mov r24, r20
+    mov r25, r21
+
+    mov r30, r22
+    mov r31, r23
+    rcall f16_extract
+    mov r16, r26
+    mov r17, r27
+    mov r18, r28
+    mov r19, r29
+    mov r22, r24
+    mov r23, r25
+    rcall f16_extract
+    mov r20, r26
+    mov r21, r27
+    mov r22, r28
+    mov r23, r29
+    or r22, r23
+    breq .div_by_zero
+    eor r16, r20
+    mov r26, r17
+    sub r26, r21
+    add r26, 15
+    mov r24, r18
+    mov r25, r19
+    mov r28, r22
+    mov r29, r23
+    ldi r30, 0x00
+    ldi r31, 0x00
+    ldi r27, 16
+.div_loop:
+    lsl r24
+    rol r25
+    lsl r30
+    rol r31
+    mov r26, r25
+    cp r26, r29
+    brlo .div_no_sub
+    sub r25, r29
+    sbc r24, r28
+    ori r31, 0x01
+.div_no_sub:
+    dec r27
+    brne .div_loop
+    mov r22, r30
+    mov r23, r31
+    mov r26, r16
+    mov r27, r26
+    mov r28, r22
+    mov r29, r23
+    rcall f16_pack
+    mov r24, r22
+    mov r25, r23
+    jmp .div_end
+.div_by_zero:
+    ldi r24, 0x00
+    ldi r25, 0x7C
+    jmp .div_end
+.div_end:
+    pop r29
+    pop r28
+    pop r27
+    pop r26
+    pop r21
+    pop r20
+    pop r19
+    pop r18
+    ret
+
+; --------------------------------------------------
+; print_hex16 - imprime r24:r25 (agora) em hex (placeholder)
+; --------------------------------------------------
+print_hex16:
+    ; conv hex nibble by nibble e rcall usart_transmit
     ret
 """
 
@@ -2878,60 +3251,55 @@ def traduzirOperacaoAritmetica(inst):
 
     codigo = f"\n; TAC: {D} = {A} {op} {B} (tipo: {tipo})\n"
     
-    # Carrega operandos
-    codigo += load_operand(A, "r23", "r22")  # A em r22:r23 (LO:HI)
-    codigo += load_operand(B, "r25", "r24")  # B em r24:r25
+    # Carrega operandos (low byte primeiro → regL, high byte → regH)
+    codigo += carregar_operando(A, "r18", "r19")  # A em r18:r19 (LO:HI)
+    codigo += carregar_operando(B, "r20", "r21")  # B em r20:r21 (LO:HI)
     
     # Converte int para IEEE 754 se necessário
-    if tipo == 'float' and tipo_a == 'int':
-        codigo += "    rcall int_to_ieee754  ; converte A para IEEE 754\n"
-        codigo += "    movw r22, r20\n"
+    if tipo == 'float':
+        if tipo_a == 'int':
+            codigo += "    movw r24, r18\n"
+            codigo += "    rcall int_to_ieee754\n"
+            codigo += "    movw r18, r24\n"
+
+        if tipo_b == 'int':
+            codigo += "    movw r24, r20\n"
+            codigo += "    rcall int_to_ieee754\n"
+            codigo += "    movw r20, r24\n"
     
-    if tipo == 'float' and tipo_b == 'int':
-        codigo += "    movw r22, r24  ; salva A\n"
-        codigo += "    rcall int_to_ieee754  ; converte B\n"
-        codigo += "    movw r24, r20\n"
-        codigo += "    movw r20, r22  ; restaura A\n"
+    if tipo == "float":
+        if op == "+":
+            codigo += "    rcall f16_add\n"
+        elif op == "-":
+            codigo += "    rcall f16_sub\n"
+        elif op == "*":
+            codigo += "    rcall f16_mul\n"
+        elif op == "/":
+            codigo += "    rcall f16_div\n"
+
+    else:  # tipo int
+        if op == "+":
+            codigo += "    movw r24, r18\n"
+            codigo += "    add  r24, r20\n"
+            codigo += "    adc  r25, r21\n"
+
+        elif op == "-":
+            codigo += "    movw r24, r18\n"
+            codigo += "    sub  r24, r20\n"
+            codigo += "    sbc  r25, r21\n"
+
+        elif op == "*":
+            codigo += gerar_mul16("r18","r19","r20","r21","r24","r25")
+
+        elif op == "/":
+            codigo += gerar_div16("r18","r19","r20","r21","r24","r25")
     
-    if op == "+":
-        if tipo == 'float':
-            codigo += "    rcall ieee754_add\n"
-        else:
-            codigo += "    add r23, r25\n    adc r22, r24\n    movw r20, r22\n"
-        
-    elif op == "-":
-        if tipo == 'float':
-            codigo += "    rcall ieee754_sub\n"
-        else:
-            codigo += "    sub r23, r25\n    sbc r22, r24\n    movw r20, r22\n"
-        
-    elif op == "*":
-        if tipo == 'float':
-            codigo += "    rcall ieee754_mul\n"
-        else:
-            codigo += gerar_mul16()
-            
-    elif op == "/":
-        if tipo == 'int':
-            codigo += gerar_div16()
-        else:
-            codigo += "    rcall ieee754_div\n"
-            
-    elif op == "|":
-        # Divisão float
-        codigo += "    rcall ieee754_div\n"
-        
-    elif op == "^":
-        if tipo == 'float':
-            codigo += "    rcall ieee754_pow\n"
-        else:
-            codigo += gerar_pow16()
+    # -----------------------------------------------------------
+    # Salvar resultado final em memória
+    # -----------------------------------------------------------
+    codigo += f"    sts {D}, r24\n"
+    codigo += f"    sts {D}+1, r25\n"
     
-    elif op == "int_to_ieee":
-        codigo += "    rcall int_to_ieee754\n"
-    
-    # Salva resultado
-    codigo += f"    sts {D}, r20\n    sts {D}+1, r21\n"
     return codigo
 
 def traduzirAtribuicao(inst):
@@ -2994,79 +3362,39 @@ def traduzirComparacao(inst):
     
     codigo = f"\n; {D} = {A} {op} {B}\n"
     
-    # Carrega A em r22:r23
-    if isinstance(A, int):
-        codigo += f"    ldi r22, {A & 0xFF}\n"
-        codigo += f"    ldi r23, {(A >> 8) & 0xFF}\n"
-    else:
-        codigo += f"    lds r22, {A}\n"
-        codigo += f"    lds r23, {A}+1\n"
-    
-    # Carrega B em r24:r25
-    if isinstance(B, int):
-        codigo += f"    ldi r24, {B & 0xFF}\n"
-        codigo += f"    ldi r25, {(B >> 8) & 0xFF}\n"
-    else:
-        codigo += f"    lds r24, {B}\n"
-        codigo += f"    lds r25, {B}+1\n"
-    
-    # Realiza comparação
-    codigo += f"    cp r22, r24\n"      # Compara low bytes
-    codigo += f"    cpc r23, r25\n"     # Compara high bytes com carry
+    codigo += carregar_operando(A, "r18", "r19")
+    codigo += carregar_operando(B, "r20", "r21")
+
+    codigo += "    cp  r18, r20\n"
+    codigo += "    cpc r19, r21\n"
+
+    codigo += "    ldi r24, 0\n"
+    codigo += "    ldi r25, 0\n"
     
     # Define resultado baseado no operador
     if op == "<":
-        # Se A < B, carry será setado
-        codigo += "    ldi r20, 0\n"
-        codigo += "    ldi r21, 0\n"
-        codigo += "    brlo cmp_true\n"  # Branch if lower (unsigned)
-        codigo += "    rjmp cmp_end\n"
-        codigo += "cmp_true:\n"
-        codigo += "    ldi r20, 1\n"
-        codigo += "cmp_end:\n"
-    
+        codigo += "    brlo _cmp_true\n"
     elif op == "<=":
-        codigo += "    ldi r20, 0\n"
-        codigo += "    ldi r21, 0\n"
-        codigo += "    brlo cmp_true\n"
-        codigo += "    breq cmp_true\n"
-        codigo += "    rjmp cmp_end\n"
-        codigo += "cmp_true:\n"
-        codigo += "    ldi r20, 1\n"
-        codigo += "cmp_end:\n"
-    
+        codigo += "    brlo _cmp_true\n"
+        codigo += "    breq _cmp_true\n"
     elif op == ">":
-        codigo += "    ldi r20, 0\n"
-        codigo += "    ldi r21, 0\n"
-        codigo += "    brsh cmp_false\n"  # Branch if same or higher
-        codigo += "    ldi r20, 1\n"
-        codigo += "cmp_false:\n"
-    
+        codigo += "    brsh _cmp_false\n"
+        codigo += "    rjmp _cmp_true\n"
     elif op == ">=":
-        codigo += "    ldi r20, 0\n"
-        codigo += "    ldi r21, 0\n"
-        codigo += "    brlo cmp_end\n"
-        codigo += "    ldi r20, 1\n"
-        codigo += "cmp_end:\n"
-    
+        codigo += "    brlo _cmp_false\n"
+        codigo += "    rjmp _cmp_true\n"
     elif op == "==":
-        codigo += "    ldi r20, 0\n"
-        codigo += "    ldi r21, 0\n"
-        codigo += "    brne cmp_end\n"
-        codigo += "    ldi r20, 1\n"
-        codigo += "cmp_end:\n"
-    
+        codigo += "    breq _cmp_true\n"
     elif op == "!=":
-        codigo += "    ldi r20, 0\n"
-        codigo += "    ldi r21, 0\n"
-        codigo += "    breq cmp_end\n"
-        codigo += "    ldi r20, 1\n"
-        codigo += "cmp_end:\n"
-    
-    # Salva resultado
-    codigo += f"    sts {D}, r20\n"
-    codigo += f"    sts {D}+1, r21\n"
-    
+        codigo += "    brne _cmp_true\n"
+
+    codigo += "    rjmp _cmp_end\n"
+    codigo += "_cmp_true:\n"
+    codigo += "    ldi r24, 1\n"
+    codigo += "_cmp_end:\n"
+
+    codigo += f"    sts {D}, r24\n"
+    codigo += f"    sts {D}+1, r25\n"
     return codigo
 
 def traduzirPrint(inst):
@@ -3111,6 +3439,9 @@ def gerarAssembly(tacOtimizado, tabela_simbolos):
     assembly.append(".equ UCSZ01, 0x02")
     assembly.append(".equ UDR0, 0xC6")
     
+    variaveis = mapear_variaveis(tacOtimizado, tabela_simbolos)
+    assembly.append(gerar_secao_dados(variaveis))
+
     assembly.append("\n.global main")
     assembly.append(ROTINAS_UART)
     assembly.append(ROTINA_PRINT_IEEE754)
@@ -3129,9 +3460,6 @@ def gerarAssembly(tacOtimizado, tabela_simbolos):
     assembly.append("    rcall UART_sendByte\n")
     assembly.append("    ldi r24, 0x0A\n")
     assembly.append("    rcall UART_sendByte\n\n")
-
-    variaveis = mapear_variaveis(tacOtimizado, tabela_simbolos)
-    assembly.append(gerar_secao_dados(variaveis))
 
     for inst in tacOtimizado:
         codigo = traduzirInstrucaoTAC(inst)
@@ -3442,6 +3770,43 @@ def main():
     salvar_tac(tac_completo, f'{nome_base}_tac.txt')
     print(f"TAC original: {nome_base}_tac.txt")
 
+    if historico_resultados:
+        # Pega o último resultado da tabela de símbolos ou última variável
+        ultima_linha = historico_resultados[-1]
+        
+        # Procura por variáveis na última linha que foram modificadas
+        ultima_var = None
+        for nome, info in tabela_simbolos.items():
+            if info.get('linha_declaracao') == len(linhas):
+                ultima_var = nome
+                break
+        
+        # Se não encontrou, usa a primeira variável declarada (FATORIAL no caso)
+        if not ultima_var and tabela_simbolos:
+            # Procura por FATORIAL ou a última variável declarada
+            for nome in ['FATORIAL', 'resultado', 'RES']:
+                if nome in tabela_simbolos:
+                    ultima_var = nome
+                    break
+            
+            if not ultima_var:
+                # Usa qualquer variável
+                ultima_var = list(tabela_simbolos.keys())[-1]
+        
+        if ultima_var:
+            tipo_var = tabela_simbolos[ultima_var].get('tipo', 'int')
+            
+            print(f"Adicionando PRINT para variável: {ultima_var} (tipo: {tipo_var})")
+            
+            # Adiciona instrução TAC para print
+            tac_completo.append({
+                'op': 'print',
+                'a': ultima_var,
+                'tipo': tipo_var,
+                'tipo_a': tipo_var,
+                'comment': f'print resultado final: {ultima_var}'
+            })
+
     # 5. Otimização de TAC
     tac_otimizado = otimizarTAC(tac_completo)
     salvar_tac_otimizado(tac_otimizado, f'{nome_base}_tac_otimizado.txt')
@@ -3454,6 +3819,8 @@ def main():
     # 7. Tabela de Símbolos
     gerar_relatorio_tabela_simbolos(tabela_simbolos, f'{nome_base}_simbolos.txt')
     print(f"Tabela de símbolos: {nome_base}_simbolos.txt")
+
+    gerarAssembly(tac_otimizado, tabela_simbolos)
 
     # ========================================
     # RESUMO FINAL
