@@ -1226,6 +1226,8 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int) -> 
     if simbolo == 'if':
         if len(ctx['pilha_tipos']) < 3:
             ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF incompleto")
+            ctx['pilha_tipos'].append('desconhecido')
+            ctx['pilha_valores'].append(None)
             return
 
         tipo_else = ctx['pilha_tipos'].pop()
@@ -1239,7 +1241,7 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int) -> 
             ctx['pilha_valores'].pop()
         if ctx['pilha_valores']:
             ctx['pilha_valores'].pop()
-
+                
         if tipo_cond != 'booleano':
             ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF requer condição booleana")
 
@@ -1261,19 +1263,27 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int) -> 
     if simbolo == 'while':
         if len(ctx['pilha_tipos']) < 2:
             ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE incompleto")
+            ctx['pilha_tipos'].append('desconhecido')
+            ctx['pilha_valores'].append(None)
             return
 
-        tipo_corpo = ctx['pilha_tipos'].pop()
-        tipo_cond = ctx['pilha_tipos'].pop()
-
-        # Descarta valores concretos
-        if ctx['pilha_valores']:
-            ctx['pilha_valores'].pop()
-        if ctx['pilha_valores']:
-            ctx['pilha_valores'].pop()
-
+        elementos_while = []
+        while ctx['pilha_tipos']:
+            elementos_while.insert(0, ctx['pilha_tipos'].pop())
+            if ctx['pilha_valores']:
+                ctx['pilha_valores'].pop()
+        
+        # Primeiro elemento = condição
+        tipo_cond = elementos_while[0] if elementos_while else 'desconhecido'
+        
+        # Último elemento = tipo de retorno
+        tipo_corpo = elementos_while[-1] if len(elementos_while) > 1 else 'desconhecido'
+        
         if tipo_cond != 'booleano':
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE requer condição booleana")
+            ctx['erros'].append(
+                f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+                f"WHILE requer condição booleana (recebeu '{tipo_cond}')"
+            )
 
         tipo_resultado = tipo_corpo
 
@@ -1288,6 +1298,79 @@ def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int) -> 
             'linha': numero_linha
         })
         return
+    
+def processar_mem_atribuicao(ctx: dict, tokens_proc: list, tabela_simbolos: dict, numero_linha: int) -> dict:
+    """
+    Processa atribuição a memória: (valor identificador)
+    O identificador é tratado como variável MEM.
+    """
+    if ctx['idx_valor'] >= len(tokens_proc):
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Token inesperado ao processar MEM")
+        return tabela_simbolos
+
+    # Já deve ter um valor na pilha
+    if not ctx['pilha_tipos']:
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: MEM sem valor para armazenar")
+        return tabela_simbolos
+
+    tipo_valor = ctx['pilha_tipos'][-1]  # Mantém na pilha para uso posterior
+    valor = ctx['pilha_valores'][-1] if ctx['pilha_valores'] else None
+
+    # O próximo token deve ser o identificador da memória
+    nome = tokens_proc[ctx['idx_valor']]
+    ctx['idx_valor'] += 1
+
+    # Registra na tabela de símbolos
+    tabela_simbolos = adicionarSimbolo(
+        tabela_simbolos, nome, tipo_valor, True, valor, numero_linha
+    )
+
+    ctx['memorias_decl_nesta_linha'].add(nome)
+
+    ctx['arvore_anotada'].append({
+        'tipo_no': 'MEM_STORE',
+        'tipo_inferido': tipo_valor,
+        'nome': nome,
+        'valor': valor,
+        'linha': numero_linha
+    })
+
+    return tabela_simbolos
+
+
+def processar_mem_leitura(ctx: dict, tokens_proc: list, tabela_simbolos: dict, numero_linha: int) -> dict:
+    """
+    Processa leitura de memória: identificador sozinho
+    """
+    if ctx['idx_valor'] >= len(tokens_proc):
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Token inesperado ao processar MEM")
+        return tabela_simbolos
+
+    nome = tokens_proc[ctx['idx_valor']]
+    ctx['idx_valor'] += 1
+
+    info = buscarSimbolo(tabela_simbolos, nome)
+
+    if info is None:
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Memória '{nome}' não inicializada")
+        tipo = 'desconhecido'
+        valor = None
+    else:
+        tipo = info.get('tipo', 'desconhecido')
+        valor = info.get('valor')
+        marcarSimboloUsado(tabela_simbolos, nome, numero_linha)
+
+    ctx['pilha_tipos'].append(tipo)
+    ctx['pilha_valores'].append(valor)
+
+    ctx['arvore_anotada'].append({
+        'tipo_no': 'MEM_LOAD',
+        'tipo_inferido': tipo,
+        'nome': nome,
+        'linha': numero_linha
+    })
+
+    return tabela_simbolos
 
 def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: dict, regras_semanticas: dict, historico_resultados: list, numero_linha: int):
     """
@@ -1300,6 +1383,7 @@ def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: di
         - Comparações
         - Estruturas de controle
         - RES
+        - MEN
 
     Retorna:
         (tabela_simbolos, erros, arvore_anotada, tipo_final, mems_declaradas)
@@ -1344,7 +1428,13 @@ def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: di
                 consumir_literal(ctx, tokens_processaveis, 'float', numero_linha)
 
             elif simbolo == 'ident':
-                tabela_simbolos = processar_identificador(ctx, tokens_processaveis, tabela_simbolos, atribuicoes_nomes, numero_linha)
+                # Verifica se é uma atribuição a MEM ou leitura de MEM
+                # Você pode detectar isso verificando o contexto
+                
+                tabela_simbolos = processar_identificador(
+                    ctx, tokens_processaveis, tabela_simbolos, 
+                    atribuicoes_nomes, numero_linha
+                )
 
             elif simbolo == 'res':
                 processar_res(ctx, tokens_processaveis, historico_resultados, numero_linha)
@@ -1777,7 +1867,48 @@ def processar_no_tac(no: dict, tac: list, pilha: list) -> dict:
         }
         pilha.append(resultado)
         return resultado
+    
+    elif tipo_no == 'MEM_STORE':
+        # Armazenar valor em memória
+        if not pilha:
+            return {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
         
+        valor_info = pilha.pop()
+        nome = no.get('nome')
+        tipo = no.get('tipo_inferido', 'int')
+        
+        # Gera TAC de atribuição à memória
+        tac.append({
+            'op': '=',
+            'a': valor_info['temp'],
+            'dest': nome,
+            'tipo': tipo,
+            'tipo_a': valor_info['tipo'],
+            'comment': f'store to memory {nome}'
+        })
+        
+        # Reempilha para uso posterior (MEM retorna o valor armazenado)
+        resultado = {
+            'temp': nome,
+            'tipo': tipo,
+            'kind': 'mem'
+        }
+        pilha.append(resultado)
+        return resultado
+    
+    elif tipo_no == 'MEM_LOAD':
+        # Carregar valor da memória
+        nome = no.get('nome')
+        tipo = no.get('tipo_inferido', 'int')
+        
+        resultado = {
+            'temp': nome,
+            'tipo': tipo,
+            'kind': 'mem'
+        }
+        pilha.append(resultado)
+        return resultado
+
     else:
         # Nó desconhecido
         return {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
@@ -3213,9 +3344,9 @@ def main():
     # Constrói a gramática LL(1)
     try:
         G, FIRST, FOLLOW, tabelaLL1 = construirGramatica()
-        print("V Gramática LL(1) construída com sucesso.")
+        print("Gramática LL(1) construída com sucesso.")
     except Exception as e:
-        print(f"X Erro ao construir a gramática: {e}")
+        print(f"Erro ao construir a gramática: {e}")
         return 1
 
     print("\n" + "="*60)
@@ -3239,7 +3370,7 @@ def main():
                 'valores': tokens_valores
             })
             
-            print(f"  V Léxico: {len(tokens)} tokens")
+            print(f"  Léxico: {len(tokens)} tokens")
 
             # Fase 2: Análise Sintática
             derivacao = analisadorSintatico(tokens, tabelaLL1)
@@ -3249,7 +3380,7 @@ def main():
                 'derivacao': derivacao
             })
             
-            print(f"  V Sintático: {len(derivacao)} produções")
+            print(f"  Sintático: {len(derivacao)} produções")
 
             # Fase 3: Análise Semântica
             tabela_simbolos, erros, arvore_anotada, tipo_final, memorias_declaradas_nesta_linha = analisarSemantica(
@@ -3270,22 +3401,22 @@ def main():
             })
 
             if erros:
-                print(f"  X Semântico: {len(erros)} erro(s)")
+                print(f"  Semântico: {len(erros)} erro(s)")
                 for e in erros:
                     todos_erros.append(e)
             else:
-                print(f"  V Semântico: OK (tipo: {tipo_final})")
+                print(f"  Semântico: OK (tipo: {tipo_final})")
 
             # Fase 4: Geração de TAC
             resetar_contadores_tac()
             tac_linha = gerarTAC(arvore_atribuida)
             tac_completo.extend(tac_linha)
-            print(f"  V TAC: {len(tac_linha)} instruções")
+            print(f"  TAC: {len(tac_linha)} instruções")
 
         except ValueError as e:
             msg = str(e)
             todos_erros.append(msg)
-            print(f"  X {msg}")
+            print(f"  {msg}")
 
     # ========================================
     # GERAÇÃO DE RELATÓRIOS E ARQUIVOS
@@ -3297,34 +3428,32 @@ def main():
     
     # 1. Relatório Léxico
     gerar_relatorio_lexico(todos_tokens, f'{nome_base}_tokens.txt')
-    print(f"V Relatório léxico: {nome_base}_tokens.txt")
+    print(f"Relatório léxico: {nome_base}_tokens.txt")
     
     # 2. Relatório Sintático
     gerar_relatorio_sintatico(todas_derivacoes, f'{nome_base}_derivacoes.txt')
-    print(f"V Relatório sintático: {nome_base}_derivacoes.txt")
+    print(f"Relatório sintático: {nome_base}_derivacoes.txt")
     
     # 3. Relatório Semântico (Árvore Atribuída)
     gerar_relatorio_semantico(todas_arvores, tabela_simbolos, f'{nome_base}_arvore.txt')
-    print(f"V Relatório semântico: {nome_base}_arvore.txt")
+    print(f"Relatório semântico: {nome_base}_arvore.txt")
     
     # 4. TAC Original
     salvar_tac(tac_completo, f'{nome_base}_tac.txt')
-    print(f"V TAC original: {nome_base}_tac.txt")
+    print(f"TAC original: {nome_base}_tac.txt")
 
     # 5. Otimização de TAC
     tac_otimizado = otimizarTAC(tac_completo)
     salvar_tac_otimizado(tac_otimizado, f'{nome_base}_tac_otimizado.txt')
-    print(f"V TAC otimizado: {nome_base}_tac_otimizado.txt")
+    print(f"TAC otimizado: {nome_base}_tac_otimizado.txt")
     
     # 6. Relatório de Otimizações
     gerar_relatorio_otimizacoes(tac_completo, tac_otimizado, f'{nome_base}_otimizacoes.md')
-    print(f"V Relatório otimizações: {nome_base}_otimizacoes.md")
+    print(f"Relatório otimizações: {nome_base}_otimizacoes.md")
     
     # 7. Tabela de Símbolos
     gerar_relatorio_tabela_simbolos(tabela_simbolos, f'{nome_base}_simbolos.txt')
-    print(f"V Tabela de símbolos: {nome_base}_simbolos.txt")
-
-    gerarAssembly(tac_otimizado, tabela_simbolos)
+    print(f"Tabela de símbolos: {nome_base}_simbolos.txt")
 
     # ========================================
     # RESUMO FINAL
@@ -3353,10 +3482,10 @@ def main():
         print("="*60)
         for i, erro in enumerate(todos_erros, 1):
             print(f"{i}. {erro}")
-        print("\nXXX Compilação concluída COM ERROS")
+        print("\n Compilação concluída COM ERROS")
         return 1
     else:
-        print("\nV Compilação concluída COM SUCESSO")
+        print("\nCompilação concluída COM SUCESSO")
         print("Todos os relatórios foram gerados.")
         return 0
 
