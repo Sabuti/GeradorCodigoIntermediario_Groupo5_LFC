@@ -2825,24 +2825,180 @@ def gerarAssembly(tacOtimizado, tabela_simbolos):
     print("Arquivo Assembly gerado: saida.s no /src/")
     return assembly
 
+def gerar_relatorio_lexico(todos_tokens: list, nome_arquivo: str) -> None:
+    """Gera relatório detalhado da análise léxica."""
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write("RELATÓRIO DE ANÁLISE LÉXICA\n")
+        f.write("=" * 60 + "\n\n")
+        
+        for item in todos_tokens:
+            f.write(f"Linha {item['linha']}: {item['codigo']}\n")
+            f.write("-" * 60 + "\n")
+            f.write(f"Total de tokens: {len(item['tokens'])}\n\n")
+            
+            f.write("Tokens identificados:\n")
+            for i, (tipo, valor) in enumerate(zip(item['tokens'], item['valores']), 1):
+                f.write(f"  {i:2d}. Tipo: {tipo:10s} | Valor: {valor}\n")
+            
+            f.write("\n")
+
+def gerar_relatorio_sintatico(todas_derivacoes: list, nome_arquivo: str) -> None:
+    """Gera relatório detalhado da análise sintática."""
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write("RELATÓRIO DE ANÁLISE SINTÁTICA\n")
+        f.write("=" * 60 + "\n\n")
+        
+        for item in todas_derivacoes:
+            f.write(f"Linha {item['linha']}:\n")
+            f.write("-" * 60 + "\n")
+            f.write(f"Total de produções: {len(item['derivacao'])}\n\n")
+            
+            f.write("Derivação (produções aplicadas):\n")
+            for i, (nao_terminal, producao) in enumerate(item['derivacao'], 1):
+                prod_str = ' '.join(producao) if producao else 'ε'
+                f.write(f"  {i:2d}. {nao_terminal:10s} → {prod_str}\n")
+            
+            f.write("\n")
+
+def gerar_relatorio_semantico(todas_arvores: list, tabela_simbolos: dict, nome_arquivo: str) -> None:
+    """Gera relatório detalhado da análise semântica com árvore atribuída."""
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write("RELATÓRIO DE ANÁLISE SEMÂNTICA\n")
+        f.write("=" * 60 + "\n\n")
+        
+        for arvore in todas_arvores:
+            f.write(f"Linha {arvore['linha']}:\n")
+            f.write("-" * 60 + "\n")
+            f.write(f"Tipo inferido: {arvore['tipo_inferido']}\n\n")
+            
+            f.write("Árvore Sintática Abstrata Atribuída:\n")
+            imprimir_arvore_recursiva(f, arvore, 0)
+            f.write("\n")
+        
+        f.write("=" * 60 + "\n")
+        f.write("TABELA DE SÍMBOLOS (resumo)\n")
+        f.write("=" * 60 + "\n\n")
+        
+        if tabela_simbolos:
+            f.write(f"{'Nome':<15} {'Tipo':<10} {'Inicializada':<12} {'Linha':<6} {'Usada':<6}\n")
+            f.write("-" * 60 + "\n")
+            for nome, info in sorted(tabela_simbolos.items()):
+                tipo = info.get('tipo', 'N/A')
+                inic = 'Sim' if info.get('inicializada') else 'Não'
+                linha = info.get('linha_declaracao', 0)
+                usada = 'Sim' if info.get('usada') else 'Não'
+                f.write(f"{nome:<15} {tipo:<10} {inic:<12} {linha:<6} {usada:<6}\n")
+        else:
+            f.write("(Nenhuma variável declarada)\n")
+
+def imprimir_arvore_recursiva(f, no: dict, nivel: int) -> None:
+    """Imprime a árvore de forma recursiva e indentada."""
+    indent = "  " * nivel
+    tipo_no = no.get('tipo_no', 'DESCONHECIDO')
+    tipo_inferido = no.get('tipo_inferido', 'N/A')
+    
+    f.write(f"{indent}[{tipo_no}] tipo: {tipo_inferido}\n")
+    
+    # Informações adicionais dependendo do tipo de nó
+    if tipo_no == 'LITERAL':
+        valor = no.get('valor')
+        f.write(f"{indent}  valor: {valor}\n")
+    
+    elif tipo_no in ['ATRIBUICAO', 'LEITURA_VARIAVEL']:
+        nome = no.get('nome')
+        f.write(f"{indent}  nome: {nome}\n")
+    
+    elif tipo_no == 'OPERACAO':
+        operador = no.get('operador')
+        operandos = no.get('operandos', [])
+        f.write(f"{indent}  operador: {operador}\n")
+        f.write(f"{indent}  operandos: {operandos}\n")
+    
+    elif tipo_no == 'COMPARACAO':
+        operador = no.get('operador')
+        operandos = no.get('operandos', [])
+        f.write(f"{indent}  comparador: {operador}\n")
+        f.write(f"{indent}  operandos: {operandos}\n")
+    
+    elif tipo_no == 'RES':
+        parametro = no.get('parametro')
+        f.write(f"{indent}  parâmetro: {parametro}\n")
+    
+    elif tipo_no == 'CONDICIONAL_IF':
+        tipo_cond = no.get('tipo_condicao')
+        tipos_ramos = no.get('tipos_ramos', [])
+        f.write(f"{indent}  condição tipo: {tipo_cond}\n")
+        f.write(f"{indent}  ramos tipos: {tipos_ramos}\n")
+    
+    elif tipo_no == 'LOOP_WHILE':
+        tipo_cond = no.get('tipo_condicao')
+        tipo_corpo = no.get('tipo_corpo')
+        f.write(f"{indent}  condição tipo: {tipo_cond}\n")
+        f.write(f"{indent}  corpo tipo: {tipo_corpo}\n")
+    
+    # Processa filhos recursivamente
+    filhos = no.get('filhos', [])
+    if filhos:
+        f.write(f"{indent}  filhos:\n")
+        for filho in filhos:
+            imprimir_arvore_recursiva(f, filho, nivel + 2)
+
+def gerar_relatorio_tabela_simbolos(tabela_simbolos: dict, nome_arquivo: str) -> None:
+    """Gera relatório completo da tabela de símbolos."""
+    with open(nome_arquivo, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write("TABELA DE SÍMBOLOS\n")
+        f.write("=" * 60 + "\n\n")
+        
+        if not tabela_simbolos:
+            f.write("(Nenhuma variável declarada)\n")
+            return
+        
+        for nome, info in sorted(tabela_simbolos.items()):
+            f.write(f"Símbolo: {nome}\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"  Tipo: {info.get('tipo', 'N/A')}\n")
+            f.write(f"  Inicializada: {'Sim' if info.get('inicializada') else 'Não'}\n")
+            f.write(f"  Valor: {info.get('valor', 'N/A')}\n")
+            f.write(f"  Linha declaração: {info.get('linha_declaracao', 0)}\n")
+            f.write(f"  Escopo: {info.get('escopo', 'global')}\n")
+            f.write(f"  Usada: {'Sim' if info.get('usada') else 'Não'}\n")
+            
+            linhas_uso = info.get('linhas_uso', [])
+            if linhas_uso:
+                f.write(f"  Linhas de uso: {', '.join(map(str, linhas_uso))}\n")
+            
+            f.write("\n")
+
 def main():
+    """
+    Função principal que orquestra todas as fases do compilador.
+    Gera todos os relatórios e arquivos intermediários necessários.
+    """
     if len(sys.argv) < 2:
         print("Uso correto: python trabalho.py <arquivo_de_entrada>")
-        print("Exemplo: python trabalho.py teste1.txt")
-        return
+        print("Exemplo: python trabalho.py fatorial.txt")
+        return 1
 
     caminho = sys.argv[1]
+    nome_base = caminho.rsplit('.', 1)[0]  # Remove extensão para usar como base
 
     # Lê o arquivo de entrada
     linhas = lerArquivo(caminho)
     if linhas is None:
-        return
+        return 1
 
     # Estruturas principais
     tabela_simbolos = inicializarTabelaSimbolos()
     historico_resultados = []
     todos_erros = []
     todas_arvores = []
+    tac_completo = []
+    todos_tokens = []  # Para relatório léxico
+    todas_derivacoes = []  # Para relatório sintático
 
     # Define as regras semânticas
     regras_semanticas = definirGramaticaAtributos()
@@ -2850,74 +3006,150 @@ def main():
     # Constrói a gramática LL(1)
     try:
         G, FIRST, FOLLOW, tabelaLL1 = construirGramatica()
-        print("Gramática LL(1) construída com sucesso.")
+        print("✓ Gramática LL(1) construída com sucesso.")
     except Exception as e:
-        print(f"Erro ao construir a gramática: {e}")
-        return
+        print(f"✗ Erro ao construir a gramática: {e}")
+        return 1
+
+    print("\n" + "="*60)
+    print("INICIANDO COMPILAÇÃO")
+    print("="*60)
 
     # Processa cada linha do arquivo
     for numero_linha, linha in enumerate(linhas, start=1):
+        print(f"\n--- Linha {numero_linha}: {linha}")
 
         try:
-            # Etapa 1: Análise Léxica
+            # Fase 1: Análise Léxica
             tokens_originais = []
             parseExpressao(linha, tokens_originais)
             tokens, tokens_valores = analisadorLexico(tokens_originais)
-            print(f"  - Análise léxica concluída ({len(tokens)} tokens).")
+            
+            todos_tokens.append({
+                'linha': numero_linha,
+                'codigo': linha,
+                'tokens': tokens,
+                'valores': tokens_valores
+            })
+            
+            print(f"  ✓ Léxico: {len(tokens)} tokens")
 
-            # Etapa 2: Análise Sintática
+            # Fase 2: Análise Sintática
             derivacao = analisadorSintatico(tokens, tabelaLL1)
-            print(f"  - Análise sintática concluída ({len(derivacao)} produções).")
+            
+            todas_derivacoes.append({
+                'linha': numero_linha,
+                'derivacao': derivacao
+            })
+            
+            print(f"  ✓ Sintático: {len(derivacao)} produções")
 
-            # Etapa 3: Análise Semântica
+            # Fase 3: Análise Semântica
             tabela_simbolos, erros, arvore_anotada, tipo_final, memorias_declaradas_nesta_linha = analisarSemantica(
                 derivacao, tokens_valores, tabela_simbolos,
                 regras_semanticas, historico_resultados, numero_linha
             )
 
-            # Validações adicionais
             erros.extend(analisarSemanticaMemoria(tabela_simbolos, numero_linha, memorias_declaradas_nesta_linha))
             erros.extend(analisarSemanticaControle(arvore_anotada, numero_linha))
 
-            # Gera árvore atribuída consolidada
             arvore_atribuida = gerarArvoreAtribuida(arvore_anotada, tipo_final, numero_linha)
             todas_arvores.append(arvore_atribuida)
 
-            # Atualiza histórico (para comandos RES)
             historico_resultados.append({
                 'linha': numero_linha,
                 'tipo': tipo_final,
                 'arvore': arvore_atribuida
             })
 
-            # Etapa 4: Geração de Código Intermediário (TAC)
-            tac = gerarTAC(arvore_atribuida)
-
-            tacOt = otimizarTAC(tac)
-            print(f"  - TAC gerado ({len(tacOt)} instruções).")
-            # Gera Assembly (salva em saida.s)
-            gerarAssembly(tacOt, tabela_simbolos)
-
-            # Resultados da linha
             if erros:
-                print(f"Erros encontrados ({len(erros)}):\n")
+                print(f"  ✗ Semântico: {len(erros)} erro(s)")
                 for e in erros:
-                    print(f"- {e}\n")
                     todos_erros.append(e)
-                print(f"  - {len(erros)} erro(s) encontrado(s).")
             else:
-                print(f"Semântico: OK (tipo final: {tipo_final})\n")
-                print("  - Análise semântica concluída sem erros.")
+                print(f"  ✓ Semântico: OK (tipo: {tipo_final})")
+
+            # Fase 4: Geração de TAC
+            resetar_contadores_tac()
+            tac_linha = gerarTAC(arvore_atribuida)
+            tac_completo.extend(tac_linha)
+            print(f"  ✓ TAC: {len(tac_linha)} instruções")
 
         except ValueError as e:
             msg = str(e)
             todos_erros.append(msg)
-            print(f"  - {msg}")
+            print(f"  ✗ {msg}")
 
+    # ========================================
+    # GERAÇÃO DE RELATÓRIOS E ARQUIVOS
+    # ========================================
+    
+    print("\n" + "="*60)
+    print("GERANDO RELATÓRIOS")
+    print("="*60)
+    
+    # 1. Relatório Léxico
+    gerar_relatorio_lexico(todos_tokens, f'{nome_base}_tokens.txt')
+    print(f"✓ Relatório léxico: {nome_base}_tokens.txt")
+    
+    # 2. Relatório Sintático
+    gerar_relatorio_sintatico(todas_derivacoes, f'{nome_base}_derivacoes.txt')
+    print(f"✓ Relatório sintático: {nome_base}_derivacoes.txt")
+    
+    # 3. Relatório Semântico (Árvore Atribuída)
+    gerar_relatorio_semantico(todas_arvores, tabela_simbolos, f'{nome_base}_arvore.txt')
+    print(f"✓ Relatório semântico: {nome_base}_arvore.txt")
+    
+    # 4. TAC Original
+    salvar_tac(tac_completo, f'{nome_base}_tac.txt')
+    print(f"✓ TAC original: {nome_base}_tac.txt")
+
+    # 5. Otimização de TAC
+    tac_otimizado = otimizarTAC(tac_completo)
+    salvar_tac_otimizado(tac_otimizado, f'{nome_base}_tac_otimizado.txt')
+    print(f"✓ TAC otimizado: {nome_base}_tac_otimizado.txt")
+    
+    # 6. Relatório de Otimizações
+    gerar_relatorio_otimizacoes(tac_completo, tac_otimizado, f'{nome_base}_otimizacoes.md')
+    print(f"✓ Relatório otimizações: {nome_base}_otimizacoes.md")
+    
+    # 7. Tabela de Símbolos
+    gerar_relatorio_tabela_simbolos(tabela_simbolos, f'{nome_base}_simbolos.txt')
+    print(f"✓ Tabela de símbolos: {nome_base}_simbolos.txt")
+
+    # ========================================
+    # RESUMO FINAL
+    # ========================================
+    
+    print("\n" + "="*60)
+    print("RESUMO DA COMPILAÇÃO")
+    print("="*60)
+    print(f"Arquivo processado: {caminho}")
+    print(f"Linhas de código: {len(linhas)}")
+    print(f"Tokens gerados: {sum(len(t['tokens']) for t in todos_tokens)}")
+    print(f"Instruções TAC originais: {len(tac_completo)}")
+    print(f"Instruções TAC otimizadas: {len(tac_otimizado)}")
+    
+    if len(tac_completo) > 0:
+        reducao = len(tac_completo) - len(tac_otimizado)
+        percentual = (reducao / len(tac_completo) * 100)
+        print(f"Otimização: {reducao} instruções removidas ({percentual:.1f}%)")
+    
+    print(f"Variáveis declaradas: {len(tabela_simbolos)}")
+    print(f"Erros encontrados: {len(todos_erros)}")
+    
     if todos_erros:
-        print("A análise foi concluída com erros. Verifique os relatórios para mais detalhes.")
+        print("\n" + "="*60)
+        print("ERROS DETECTADOS")
+        print("="*60)
+        for i, erro in enumerate(todos_erros, 1):
+            print(f"{i}. {erro}")
+        print("\n⚠ Compilação concluída COM ERROS")
+        return 1
     else:
-        print("A análise foi concluída com sucesso, sem erros encontrados.")
+        print("\n✓ Compilação concluída COM SUCESSO")
+        print("Todos os relatórios foram gerados.")
+        return 0
 
 if __name__ == "__main__":
     main()
