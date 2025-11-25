@@ -2264,10 +2264,6 @@ def formatar_instrucao_tac(inst: dict) -> str:
 def salvar_tac_otimizado(tac: list, nome_arquivo: str = 'tac_otimizado.txt') -> None:
     """Salva o TAC otimizado (mesmo formato do TAC original)."""
     salvar_tac(tac, nome_arquivo)
-# A convenção usada:
-# - temporários gerados: t1, t2, t3, ...
-# - variáveis globais são escritas como rótulos .word
-# - floats são convertidos para Q8.8 e armazenados como inteiros (16 bits)
 
 TEMP_COUNTER = 0
 def novo_temp():
@@ -2275,37 +2271,47 @@ def novo_temp():
     TEMP_COUNTER += 1
     return f"t{TEMP_COUNTER}"
 
-def int_to_q8_8_integer(value_float):
-    # converte float -> Q8.8 int (arredonda)
-    return int(round(value_float * 256.0))
-
-# -------------------------
-# Gerador de Assembly (contém rotinas UART e print hex)
-
-EPILOGO = """
-; fim do programa - trava
-fim:
-    rjmp fim
-"""
-
 # seção dados e helpers
 def mapear_variaveis(tac, tabela_simbolos):
+    """Mapeia todas as variáveis usadas no TAC"""
     vars_map = {}
+    
     for inst in tac:
+        # Verifica todos os campos que podem conter variáveis
         for campo in ["a", "b", "dest"]:
-            if campo in inst:
-                val = inst[campo]
-                if isinstance(val, str) and not val.startswith('label_'):
+            val = inst.get(campo)
+            
+            if val and isinstance(val, str):
+                # Ignora labels, registradores e operadores
+                if (not val.startswith('L') and 
+                    not val.startswith('r') and 
+                    not val.startswith('t') and
+                    val not in ['label', 'goto', 'ifFalse', 'print'] and
+                    len(val) > 0):
+                    
+                    # Adiciona variável ao mapa
                     if val not in vars_map:
-                        vars_map[val] = f" .word 0"
+                        vars_map[val] = ".word 0"
+    
+    # Adiciona variáveis da tabela de símbolos
+    for var_name in tabela_simbolos.keys():
+        if var_name not in vars_map:
+            vars_map[var_name] = ".word 0"
+    
     return vars_map
 
 def gerar_secao_dados(vars_map):
-    #data_lines = [".data"]
-    data_lines = [""] # por enquanto sem seção .data
-    #for nome, tipo in vars_map.items():
-    #    data_lines.append(f"{nome}:\t{tipo}")
+    data_lines = ["\n"] 
+    data_lines.append(".data")
+    
+    for var_name, var_init in vars_map.items():
+        # Remove ponto inicial se houver
+        clean_name = var_name.lstrip('.')
+        data_lines.append(f"{clean_name}: .word 0  ; variável {clean_name}")
+    
+    data_lines.append("\n; === SEÇÃO DE CÓDIGO ===")
     data_lines.append(".text")
+    
     return "\n".join(data_lines)
 
 # gerar carregamento de operando
@@ -2469,37 +2475,75 @@ UART_printHex16:
     pop r19
     pop r18
     ret
-
 """
 
-ROTINA_PRINT_Q8_8 = r"""
-UART_printQ8_8:
+ROTINA_PRINT_IEEE754 = r"""
+; Imprime valor IEEE 754 half-precision como decimal
+; Entrada: r24:r25 = valor IEEE 754 half (little-endian)
+UART_printIEEE754:
     push r18
     push r19
     push r20
     push r21
     push r22
     push r23
+    push r26
+    push r27
     
-    ; Separa parte inteira (bits 15-8) e fracionária (bits 7-0)
-    mov r22, r25        ; parte inteira em r22
-    mov r23, r24        ; parte fracionária em r23
+    ; r24 = low byte, r25 = high byte
+    ; Extrai sinal (bit 15)
+    mov r18, r25
+    andi r18, 0x80
+    breq ieee_positive
     
-    ; Imprime parte inteira (8 bits)
-    mov r24, r22
-    rcall UART_printDec8
-    
-    ; Imprime ponto decimal
-    ldi r24, '.'
+    ; Imprime sinal negativo
+    ldi r24, '-'
     rcall UART_sendByte
     
-    ; Converte fração: (frac * 100) >> 8
-    mov r24, r23
-    ldi r25, 100
-    mul r24, r25        ; r1:r0 = frac * 100
-    mov r24, r1         ; pega byte alto (>> 8)
-    rcall UART_printDec8
+ieee_positive:
+    ; Extrai expoente (bits 10-14) e mantissa (bits 0-9)
+    mov r19, r25        ; high byte
+    mov r20, r24        ; low byte
     
+    ; Caso especial: zero
+    andi r19, 0x7F      ; remove sinal
+    or r19, r20
+    breq ieee_print_zero
+    
+    ; Verifica se é zero (expoente e mantissa = 0)
+    mov r19, r25
+    andi r19, 0x7C      ; bits 10-14 (expoente >> 2)
+    breq ieee_print_zero
+    
+    ; Converte para decimal aproximado (simplificado)
+    ; Para valores pequenos, usa conversão direta
+    ; Para produção, implementar conversão completa IEEE 754
+    
+    ; Implementação simplificada: usa tabela de lookup ou aproximação
+    ; Por ora, imprime em hexadecimal com prefixo
+    ldi r24, '0'
+    rcall UART_sendByte
+    ldi r24, 'x'
+    rcall UART_sendByte
+    
+    mov r24, r25
+    rcall UART_printHex8
+    mov r24, r20
+    rcall UART_printHex8
+    
+    rjmp ieee_end
+    
+ieee_print_zero:
+    ldi r24, '0'
+    rcall UART_sendByte
+    ldi r24, '.'
+    rcall UART_sendByte
+    ldi r24, '0'
+    rcall UART_sendByte
+    
+ieee_end:
+    pop r27
+    pop r26
     pop r23
     pop r22
     pop r21
@@ -2508,70 +2552,166 @@ UART_printQ8_8:
     pop r18
     ret
 
-; Imprime byte como decimal (0-255)
-UART_printDec8:
+; Converte int16 para IEEE 754 half-precision
+; Entrada: r22:r23 = inteiro (little-endian)
+; Saída: r20:r21 = IEEE 754 half
+int_to_ieee754:
     push r18
     push r19
-    push r20
+    push r24
+    push r25
     
-    ; Divide por 100
-    ldi r18, 100
-    clr r19
+    ; Verifica se é zero
+    or r22, r23
+    breq int_ieee_zero
+    
+    ; Extrai sinal
+    clr r18             ; sinal = 0 (positivo)
+    mov r19, r23
+    andi r19, 0x80
+    breq int_ieee_pos
+    
+    ; Negativo: complemento de 2
+    ldi r18, 0x80       ; sinal = 1
+    com r22
+    com r23
+    inc r22
+    brne int_ieee_pos
+    inc r23
+    
+int_ieee_pos:
+    ; Encontra bit mais significativo (normaliza)
+    ; Simplificação: assume valores pequenos (< 1024)
+    ; Expoente = 15 + posição do MSB
+    
+    ldi r24, 15 + 10    ; expoente base + offset mantissa
+    mov r25, r23
+    
+    ; Conta zeros à esquerda (simplificado para 8 bits)
+ieee_norm_loop:
+    sbrc r25, 7
+    rjmp ieee_norm_done
+    lsl r22
+    rol r23
+    dec r24
+    rjmp ieee_norm_loop
+    
+ieee_norm_done:
+    ; Monta IEEE 754
+    ; r24 = expoente, r22:r23 = mantissa normalizada
+    ; Remove bit implícito (MSB)
+    lsl r22
+    rol r23
+    
+    ; r20 = low byte, r21 = high byte
+    mov r20, r22
+    mov r21, r23
+    lsr r21
+    lsr r21             ; ajusta mantissa para 10 bits
+    
+    ; Insere expoente
+    mov r25, r24
+    lsl r25
+    lsl r25             ; expoente << 2
+    or r21, r25
+    
+    ; Insere sinal
+    or r21, r18
+    
+    rjmp int_ieee_end
+    
+int_ieee_zero:
     clr r20
-dec_100:
-    cp r24, r18
-    brlo dec_10
-    sub r24, r18
-    inc r19
-    rjmp dec_100
-    
-dec_10:
-    ; r19 = centenas, r24 = resto
-    ; Divide resto por 10
-    ldi r18, 10
-dec_10_loop:
-    cp r24, r18
-    brlo dec_1
-    sub r24, r18
-    inc r20
-    rjmp dec_10_loop
-    
-dec_1:
-    ; r19=centenas, r20=dezenas, r24=unidades
-    ; Imprime (suprime zeros à esquerda)
-    tst r19
-    breq skip_cent
-    mov r18, r19
-    ldi r24, '0'
-    add r24, r18
-    rcall UART_sendByte
-    ldi r21, 1          ; flag: já imprimiu algo
-    rjmp print_dez
-    
-skip_cent:
     clr r21
     
-print_dez:
-    tst r21
-    brne print_dez_force
-    tst r20
-    breq print_uni
-print_dez_force:
-    mov r18, r20
-    ldi r24, '0'
-    add r24, r18
-    rcall UART_sendByte
-    
-print_uni:
-    ldi r18, '0'
-    add r24, r18
-    rcall UART_sendByte
-    
-    pop r20
+int_ieee_end:
+    pop r25
+    pop r24
     pop r19
     pop r18
     ret
 """
+
+OPERACOES_IEEE754 = r"""
+; Operações IEEE 754 half-precision (stubs - implementação simplificada)
+
+ieee754_add:
+    ; TODO: Implementar adição IEEE 754 completa
+    ; Por ora, retorna primeiro operando
+    movw r20, r22
+    ret
+
+ieee754_sub:
+    ; TODO: Implementar subtração IEEE 754
+    movw r20, r22
+    ret
+
+ieee754_mul:
+    ; TODO: Implementar multiplicação IEEE 754
+    movw r20, r22
+    ret
+
+ieee754_div:
+    ; TODO: Implementar divisão IEEE 754
+    movw r20, r22
+    ret
+
+ieee754_pow:
+    ; TODO: Implementar potência IEEE 754
+    movw r20, r22
+    ret
+"""
+
+def float_to_ieee754_half(value):
+    """
+    Converte um float Python para formato IEEE 754 half-precision (16 bits)
+    Formato: 1 bit sinal | 5 bits expoente | 10 bits mantissa
+    """
+    import struct
+    
+    # Casos especiais
+    if value == 0.0:
+        return 0x0000
+    if value != value:  # NaN
+        return 0x7E00
+    
+    # Extrai sinal
+    sign = 0 if value >= 0 else 1
+    value = abs(value)
+    
+    # Infinito
+    if value == float('inf'):
+        return (sign << 15) | 0x7C00
+    
+    # Converte para float32 primeiro para facilitar
+    bits32 = struct.unpack('>I', struct.pack('>f', value))[0]
+    
+    # Extrai componentes do float32
+    sign32 = (bits32 >> 31) & 0x1
+    exp32 = (bits32 >> 23) & 0xFF
+    mant32 = bits32 & 0x7FFFFF
+    
+    # Ajusta expoente (bias 127 -> bias 15)
+    exp16 = exp32 - 127 + 15
+    
+    # Overflow -> infinito
+    if exp16 >= 31:
+        return (sign << 15) | 0x7C00
+    
+    # Underflow -> zero
+    if exp16 <= 0:
+        return sign << 15
+    
+    # Trunca mantissa de 23 para 10 bits
+    mant16 = mant32 >> 13
+    
+    # Monta o half-precision
+    result = (sign << 15) | (exp16 << 10) | mant16
+    return result & 0xFFFF
+
+def int_to_ieee754_half(value_int):
+    """Converte inteiro para IEEE 754 half-precision"""
+    return float_to_ieee754_half(float(value_int))
 
 # Tradução de instrução TAC para assembly
 def traduzirInstrucaoTAC(inst):
@@ -2580,6 +2720,8 @@ def traduzirInstrucaoTAC(inst):
         return traduzirOperacaoAritmetica(inst)
     elif op == "=":
         return traduzirAtribuicao(inst)
+    elif op in ["<", ">", "<=", ">=", "==", "!="]:
+        return traduzirComparacao(inst)
     elif op == "label":
         return f"{inst['dest']}:\n"
     elif op == "goto":
@@ -2593,62 +2735,8 @@ def traduzirInstrucaoTAC(inst):
     else:
         return f"; [ERRO] operação TAC não reconhecida: {op}\n"
     
-def converter_operandos_q8_8(left, right, op, tipo_resultado, tac):
-    """
-    Gera código TAC para converter operandos int->Q8.8 quando necessário
-    Retorna: (left_operand, right_operand, tipo_operacao)
-    """
-    left_name = left['value'] if left['kind']=='imm' else left['name']
-    right_name = right['value'] if right['kind']=='imm' else right['name']
-    
-    # Se resultado é float, promove operandos int para Q8.8
-    if tipo_resultado == 'float':
-        if left['tipo'] == 'int':
-            temp_left = novo_temp()
-            if left['kind'] == 'imm':
-                # Converte literal int para Q8.8
-                val_q8 = int_to_q8_8_integer(left['value'])
-                tac.append({
-                    'op': '=',
-                    'a': val_q8,
-                    'dest': temp_left,
-                    'tipo': 'float',
-                    'tipo_a': 'float'
-                })
-            else:
-                # int_to_q8_8: shift left 8
-                tac.append({
-                    'op': 'int_to_q8',
-                    'a': left_name,
-                    'dest': temp_left,
-                    'tipo': 'float'
-                })
-            left_name = temp_left
-            
-        if right['tipo'] == 'int':
-            temp_right = novo_temp()
-            if right['kind'] == 'imm':
-                val_q8 = int_to_q8_8_integer(right['value'])
-                tac.append({
-                    'op': '=',
-                    'a': val_q8,
-                    'dest': temp_right,
-                    'tipo': 'float',
-                    'tipo_a': 'float'
-                })
-            else:
-                tac.append({
-                    'op': 'int_to_q8',
-                    'a': right_name,
-                    'dest': temp_right,
-                    'tipo': 'float'
-                })
-            right_name = temp_right
-    
-    return left_name, right_name, tipo_resultado
-
 def traduzirOperacaoAritmetica(inst):
-    """Traduz operação com suporte correto a Q8.8"""
+    """Traduz operação com suporte a IEEE 754 half-precision"""
     A = inst.get("a")
     B = inst.get("b")
     D = inst.get("dest")
@@ -2660,22 +2748,35 @@ def traduzirOperacaoAritmetica(inst):
     codigo = f"\n; TAC: {D} = {A} {op} {B} (tipo: {tipo})\n"
     
     # Carrega operandos
-    codigo += load_operand(A, "r23", "r22")  # A em r22:r23 (HI:LO)
+    codigo += load_operand(A, "r23", "r22")  # A em r22:r23 (LO:HI)
     codigo += load_operand(B, "r25", "r24")  # B em r24:r25
     
+    # Converte int para IEEE 754 se necessário
+    if tipo == 'float' and tipo_a == 'int':
+        codigo += "    rcall int_to_ieee754  ; converte A para IEEE 754\n"
+        codigo += "    movw r22, r20\n"
+    
+    if tipo == 'float' and tipo_b == 'int':
+        codigo += "    movw r22, r24  ; salva A\n"
+        codigo += "    rcall int_to_ieee754  ; converte B\n"
+        codigo += "    movw r24, r20\n"
+        codigo += "    movw r20, r22  ; restaura A\n"
+    
     if op == "+":
-        codigo += "    add r23, r25\n    adc r22, r24\n    movw r20, r22\n"
+        if tipo == 'float':
+            codigo += "    rcall ieee754_add\n"
+        else:
+            codigo += "    add r23, r25\n    adc r22, r24\n    movw r20, r22\n"
         
     elif op == "-":
-        codigo += "    sub r23, r25\n    sbc r22, r24\n    movw r20, r22\n"
+        if tipo == 'float':
+            codigo += "    rcall ieee754_sub\n"
+        else:
+            codigo += "    sub r23, r25\n    sbc r22, r24\n    movw r20, r22\n"
         
     elif op == "*":
         if tipo == 'float':
-            # Multiplicação Q8.8: resultado em Q16.16, precisa shift right 8
-            codigo += gerar_mul16()
-            codigo += "; Shift right 8 bits (Q16.16 -> Q8.8)\n"
-            codigo += "    mov r20, r21\n"
-            codigo += "    ldi r21, 0\n"
+            codigo += "    rcall ieee754_mul\n"
         else:
             codigo += gerar_mul16()
             
@@ -2683,29 +2784,20 @@ def traduzirOperacaoAritmetica(inst):
         if tipo == 'int':
             codigo += gerar_div16()
         else:
-            # Já não deveria chegar aqui - use '|' para divisão float
-            codigo += "; ERRO: use | para divisao float\n"
+            codigo += "    rcall ieee754_div\n"
             
     elif op == "|":
-        # Divisão float: A<<8 / B
-        codigo += "; Divisao Q8.8: shift left A 8 bits\n"
-        for _ in range(8):
-            codigo += "    lsl r23\n    rol r22\n"
-        codigo += gerar_div16()
+        # Divisão float
+        codigo += "    rcall ieee754_div\n"
         
     elif op == "^":
-        codigo += gerar_pow16()
         if tipo == 'float':
-            # Se operandos eram Q8.8, resultado está em Q8.8^n
-            # Precisa normalizar (complexo) - simplificação: aviso
-            codigo += "; AVISO: potencia Q8.8 pode overflow\n"
+            codigo += "    rcall ieee754_pow\n"
+        else:
+            codigo += gerar_pow16()
     
-    elif op == "int_to_q8":
-        # Conversão int -> Q8.8: shift left 8
-        codigo += "; Converte int para Q8.8\n"
-        for _ in range(8):
-            codigo += "    lsl r23\n    rol r22\n"
-        codigo += "    movw r20, r22\n"
+    elif op == "int_to_ieee":
+        codigo += "    rcall int_to_ieee754\n"
     
     # Salva resultado
     codigo += f"    sts {D}, r20\n    sts {D}+1, r21\n"
@@ -2714,9 +2806,25 @@ def traduzirOperacaoAritmetica(inst):
 def traduzirAtribuicao(inst):
     A = inst.get("a")
     D = inst.get("dest")
-    codigo = f"\n; TAC: {D} = {A}\n"
-    codigo += load_operand(A, "r20", "r21")
-    codigo += f"    sts {D}, r20\n    sts {D}+1, r21\n"
+    tipo_a = inst.get("tipo_a", "int")
+    
+    codigo = f"\n; {D} = {A}\n"
+    
+    # Carrega valor em r20:r21
+    if isinstance(A, int):
+        lo = A & 0xFF
+        hi = (A >> 8) & 0xFF
+        codigo += f"    ldi r20, {lo}\n"
+        codigo += f"    ldi r21, {hi}\n"
+    else:
+        # Carrega de outra variável
+        codigo += f"    lds r20, {A}\n"
+        codigo += f"    lds r21, {A}+1\n"
+    
+    # Armazena no destino
+    codigo += f"    sts {D}, r20\n"
+    codigo += f"    sts {D}+1, r21\n"
+    
     return codigo
 
 def traduzirIfGoto(inst):
@@ -2728,13 +2836,110 @@ def traduzirIfFalse(inst):
     cond = inst.get("a")
     destino = inst.get("dest")
 
-    codigo  = f"\n    lds r16, {cond}\n"   # carrega variável
-    codigo += f"    cpi r16, 0\n"         # compara com zero
-    codigo += f"    breq {destino}\n"     # se for zero, pula
+    codigo = f"\n; ifFalse {cond} goto {destino}\n"
+    
+    # Carrega a condição
+    if isinstance(cond, int):
+        lo = cond & 0xFF
+        hi = (cond >> 8) & 0xFF
+        codigo += f"    ldi r16, {lo}\n"
+        codigo += f"    ldi r17, {hi}\n"
+    else:
+        codigo += f"    lds r16, {cond}\n"
+        codigo += f"    lds r17, {cond}+1\n"
+    
+    # Testa se é zero (falso)
+    codigo += f"    or r16, r17\n"      # OR dos dois bytes
+    codigo += f"    breq {destino}\n"   # Se zero, pula
+    
+    return codigo
+
+def traduzirComparacao(inst):
+    """Gera código para comparação entre valores"""
+    A = inst.get("a")
+    B = inst.get("b")
+    D = inst.get("dest")
+    op = inst.get("op")
+    
+    codigo = f"\n; {D} = {A} {op} {B}\n"
+    
+    # Carrega A em r22:r23
+    if isinstance(A, int):
+        codigo += f"    ldi r22, {A & 0xFF}\n"
+        codigo += f"    ldi r23, {(A >> 8) & 0xFF}\n"
+    else:
+        codigo += f"    lds r22, {A}\n"
+        codigo += f"    lds r23, {A}+1\n"
+    
+    # Carrega B em r24:r25
+    if isinstance(B, int):
+        codigo += f"    ldi r24, {B & 0xFF}\n"
+        codigo += f"    ldi r25, {(B >> 8) & 0xFF}\n"
+    else:
+        codigo += f"    lds r24, {B}\n"
+        codigo += f"    lds r25, {B}+1\n"
+    
+    # Realiza comparação
+    codigo += f"    cp r22, r24\n"      # Compara low bytes
+    codigo += f"    cpc r23, r25\n"     # Compara high bytes com carry
+    
+    # Define resultado baseado no operador
+    if op == "<":
+        # Se A < B, carry será setado
+        codigo += "    ldi r20, 0\n"
+        codigo += "    ldi r21, 0\n"
+        codigo += "    brlo cmp_true\n"  # Branch if lower (unsigned)
+        codigo += "    rjmp cmp_end\n"
+        codigo += "cmp_true:\n"
+        codigo += "    ldi r20, 1\n"
+        codigo += "cmp_end:\n"
+    
+    elif op == "<=":
+        codigo += "    ldi r20, 0\n"
+        codigo += "    ldi r21, 0\n"
+        codigo += "    brlo cmp_true\n"
+        codigo += "    breq cmp_true\n"
+        codigo += "    rjmp cmp_end\n"
+        codigo += "cmp_true:\n"
+        codigo += "    ldi r20, 1\n"
+        codigo += "cmp_end:\n"
+    
+    elif op == ">":
+        codigo += "    ldi r20, 0\n"
+        codigo += "    ldi r21, 0\n"
+        codigo += "    brsh cmp_false\n"  # Branch if same or higher
+        codigo += "    ldi r20, 1\n"
+        codigo += "cmp_false:\n"
+    
+    elif op == ">=":
+        codigo += "    ldi r20, 0\n"
+        codigo += "    ldi r21, 0\n"
+        codigo += "    brlo cmp_end\n"
+        codigo += "    ldi r20, 1\n"
+        codigo += "cmp_end:\n"
+    
+    elif op == "==":
+        codigo += "    ldi r20, 0\n"
+        codigo += "    ldi r21, 0\n"
+        codigo += "    brne cmp_end\n"
+        codigo += "    ldi r20, 1\n"
+        codigo += "cmp_end:\n"
+    
+    elif op == "!=":
+        codigo += "    ldi r20, 0\n"
+        codigo += "    ldi r21, 0\n"
+        codigo += "    breq cmp_end\n"
+        codigo += "    ldi r20, 1\n"
+        codigo += "cmp_end:\n"
+    
+    # Salva resultado
+    codigo += f"    sts {D}, r20\n"
+    codigo += f"    sts {D}+1, r21\n"
+    
     return codigo
 
 def traduzirPrint(inst):
-    """Imprime valor com formatação correta (hex para int, decimal para float)"""
+    """Imprime valor com formatação correta"""
     A = inst.get("a")
     tipo = inst.get("tipo_a", inst.get("tipo", "int"))
     
@@ -2748,23 +2953,21 @@ def traduzirPrint(inst):
         codigo += f"    lds r24, {A}\n    lds r25, {A}+1\n"
     
     if tipo == 'float':
-        # Imprime como decimal Q8.8
-        codigo += "    rcall UART_printQ8_8\n"
+        codigo += "    rcall UART_printIEEE754\n"
     else:
-        # Imprime como hex
-        codigo += "    mov r18, r25\n    mov r24, r18\n"
-        codigo += "    rcall UART_printHex8\n"
-        codigo += f"    lds r24, {A}\n" if not isinstance(A, int) else f"    ldi r24, {lo}\n"
-        codigo += "    rcall UART_printHex8\n"
+        codigo += "    rcall UART_printHex16\n"
     
-    codigo += "    ldi r24, 0x0A\n    rcall UART_sendByte\n"
+    # Adiciona newline SEMPRE
+    codigo += "    ldi r24, 0x0D\n    rcall UART_sendByte\n"  # CR
+    codigo += "    ldi r24, 0x0A\n    rcall UART_sendByte\n"  # LF
+    
     return codigo
 
 # -------------------------
 # Geração de Código Assembly completo
 def gerarAssembly(tacOtimizado, tabela_simbolos):
     assembly = []
-    assembly.append(".equ RAMEND, 0x08FF")  # exemplo para ATmega328P
+    assembly.append(".equ RAMEND, 0x08FF")
     assembly.append(".equ SPL, 0x3D")
     assembly.append(".equ SPH, 0x3E")
     assembly.append(".equ TXEN0, 0x03")
@@ -2776,44 +2979,57 @@ def gerarAssembly(tacOtimizado, tabela_simbolos):
     assembly.append(".equ UCSZ00, 0x01")
     assembly.append(".equ UCSZ01, 0x02")
     assembly.append(".equ UDR0, 0xC6")
-    # inicialização de pilha (prologue runtime)
+    
     assembly.append("\n.global main")
     assembly.append(ROTINAS_UART)
-    assembly.append(ROTINA_PRINT_Q8_8)
-    assembly.append("\n\nmain:\n    ; inicializa pilha\n    ldi r16, hi8(RAMEND)\n    out SPH, r16\n    ldi r16, lo8(RAMEND)\n    out SPL, r16\n    rcall UART_init\n")
+    assembly.append(ROTINA_PRINT_IEEE754)
+    assembly.append(OPERACOES_IEEE754)
+    
+    assembly.append("\n\nmain:\n    ; inicializa pilha\n    ldi r16, hi8(RAMEND)\n    out SPH, r16\n    ldi r16, lo8(RAMEND)\n    out SPL, r16\n")
+    assembly.append("    rcall UART_init\n")
+    
+    # Teste inicial - imprime caractere de teste
+    assembly.append("\n    ; Teste inicial UART\n")
+    assembly.append("    ldi r24, 'O'\n")
+    assembly.append("    rcall UART_sendByte\n")
+    assembly.append("    ldi r24, 'K'\n")
+    assembly.append("    rcall UART_sendByte\n")
+    assembly.append("    ldi r24, 0x0D\n")
+    assembly.append("    rcall UART_sendByte\n")
+    assembly.append("    ldi r24, 0x0A\n")
+    assembly.append("    rcall UART_sendByte\n\n")
 
-    # Criar mapa de variáveis para memória estática
     variaveis = mapear_variaveis(tacOtimizado, tabela_simbolos)
-
     assembly.append(gerar_secao_dados(variaveis))
 
-    # Converter cada instrução TAC → AVR
     for inst in tacOtimizado:
         codigo = traduzirInstrucaoTAC(inst)
         assembly.append(codigo)
+    
+    # Epílogo
+    assembly.append("\n; Fim do programa")
+    assembly.append("fim:")
+    assembly.append("    rjmp fim  ; Loop infinito\n")
 
-    # epílogo e trava
-    assembly.append(EPILOGO)
-
-    # salvar em arquivo
     texto = "\n".join(assembly)
-
     linhas = texto.split("\n")
     nova = []
     vistos = set()
 
     for linha in linhas:
-        if linha.endswith(":"):
-            if linha in vistos:
+        stripped = linha.strip()
+        if stripped.endswith(":"):
+            if stripped in vistos:
                 continue
-            vistos.add(linha)
+            vistos.add(stripped)
         nova.append(linha)
-
+    
     texto = "\n".join(nova)
 
     with open("./src/saida.s", "w", encoding="utf-8") as f:
         f.write(texto)
-    print("Arquivo Assembly gerado: saida.s no /src/")
+    
+    print("\n✓ Arquivo Assembly gerado: saida.s")
     return assembly
 
 def gerar_relatorio_lexico(todos_tokens: list, nome_arquivo: str) -> None:
@@ -2997,9 +3213,9 @@ def main():
     # Constrói a gramática LL(1)
     try:
         G, FIRST, FOLLOW, tabelaLL1 = construirGramatica()
-        print("✓ Gramática LL(1) construída com sucesso.")
+        print("V Gramática LL(1) construída com sucesso.")
     except Exception as e:
-        print(f"✗ Erro ao construir a gramática: {e}")
+        print(f"X Erro ao construir a gramática: {e}")
         return 1
 
     print("\n" + "="*60)
@@ -3023,7 +3239,7 @@ def main():
                 'valores': tokens_valores
             })
             
-            print(f"  ✓ Léxico: {len(tokens)} tokens")
+            print(f"  V Léxico: {len(tokens)} tokens")
 
             # Fase 2: Análise Sintática
             derivacao = analisadorSintatico(tokens, tabelaLL1)
@@ -3033,7 +3249,7 @@ def main():
                 'derivacao': derivacao
             })
             
-            print(f"  ✓ Sintático: {len(derivacao)} produções")
+            print(f"  V Sintático: {len(derivacao)} produções")
 
             # Fase 3: Análise Semântica
             tabela_simbolos, erros, arvore_anotada, tipo_final, memorias_declaradas_nesta_linha = analisarSemantica(
@@ -3054,22 +3270,22 @@ def main():
             })
 
             if erros:
-                print(f"  ✗ Semântico: {len(erros)} erro(s)")
+                print(f"  X Semântico: {len(erros)} erro(s)")
                 for e in erros:
                     todos_erros.append(e)
             else:
-                print(f"  ✓ Semântico: OK (tipo: {tipo_final})")
+                print(f"  V Semântico: OK (tipo: {tipo_final})")
 
             # Fase 4: Geração de TAC
             resetar_contadores_tac()
             tac_linha = gerarTAC(arvore_atribuida)
             tac_completo.extend(tac_linha)
-            print(f"  ✓ TAC: {len(tac_linha)} instruções")
+            print(f"  V TAC: {len(tac_linha)} instruções")
 
         except ValueError as e:
             msg = str(e)
             todos_erros.append(msg)
-            print(f"  ✗ {msg}")
+            print(f"  X {msg}")
 
     # ========================================
     # GERAÇÃO DE RELATÓRIOS E ARQUIVOS
@@ -3081,32 +3297,34 @@ def main():
     
     # 1. Relatório Léxico
     gerar_relatorio_lexico(todos_tokens, f'{nome_base}_tokens.txt')
-    print(f"✓ Relatório léxico: {nome_base}_tokens.txt")
+    print(f"V Relatório léxico: {nome_base}_tokens.txt")
     
     # 2. Relatório Sintático
     gerar_relatorio_sintatico(todas_derivacoes, f'{nome_base}_derivacoes.txt')
-    print(f"✓ Relatório sintático: {nome_base}_derivacoes.txt")
+    print(f"V Relatório sintático: {nome_base}_derivacoes.txt")
     
     # 3. Relatório Semântico (Árvore Atribuída)
     gerar_relatorio_semantico(todas_arvores, tabela_simbolos, f'{nome_base}_arvore.txt')
-    print(f"✓ Relatório semântico: {nome_base}_arvore.txt")
+    print(f"V Relatório semântico: {nome_base}_arvore.txt")
     
     # 4. TAC Original
     salvar_tac(tac_completo, f'{nome_base}_tac.txt')
-    print(f"✓ TAC original: {nome_base}_tac.txt")
+    print(f"V TAC original: {nome_base}_tac.txt")
 
     # 5. Otimização de TAC
     tac_otimizado = otimizarTAC(tac_completo)
     salvar_tac_otimizado(tac_otimizado, f'{nome_base}_tac_otimizado.txt')
-    print(f"✓ TAC otimizado: {nome_base}_tac_otimizado.txt")
+    print(f"V TAC otimizado: {nome_base}_tac_otimizado.txt")
     
     # 6. Relatório de Otimizações
     gerar_relatorio_otimizacoes(tac_completo, tac_otimizado, f'{nome_base}_otimizacoes.md')
-    print(f"✓ Relatório otimizações: {nome_base}_otimizacoes.md")
+    print(f"V Relatório otimizações: {nome_base}_otimizacoes.md")
     
     # 7. Tabela de Símbolos
     gerar_relatorio_tabela_simbolos(tabela_simbolos, f'{nome_base}_simbolos.txt')
-    print(f"✓ Tabela de símbolos: {nome_base}_simbolos.txt")
+    print(f"V Tabela de símbolos: {nome_base}_simbolos.txt")
+
+    gerarAssembly(tac_otimizado, tabela_simbolos)
 
     # ========================================
     # RESUMO FINAL
@@ -3135,10 +3353,10 @@ def main():
         print("="*60)
         for i, erro in enumerate(todos_erros, 1):
             print(f"{i}. {erro}")
-        print("\n⚠ Compilação concluída COM ERROS")
+        print("\nXXX Compilação concluída COM ERROS")
         return 1
     else:
-        print("\n✓ Compilação concluída COM SUCESSO")
+        print("\nV Compilação concluída COM SUCESSO")
         print("Todos os relatórios foram gerados.")
         return 0
 
