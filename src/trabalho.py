@@ -61,6 +61,7 @@ def parseExpressao(linha, _tokens_):
     token = ""
     parenteses = 0
     i = 0
+    linha = linha.strip()
 
     while i < len(linha):
         char = linha[i]
@@ -69,6 +70,8 @@ def parseExpressao(linha, _tokens_):
             if token:
                 _tokens_.append(token)
                 token = ""
+                i += 1
+                continue
 
         elif char in "()":
             if token:
@@ -167,7 +170,7 @@ def analisadorLexico(tokens_originais: list[str]) -> tuple[list[str], list]:
             tokens_valores.append(token)
             continue
 
-        if estadoOperador(token):
+        if estadoOperador(token) and not estadoComparador(token):
             tokens_convertidos.append(token)
             tokens_valores.append(token)
             continue
@@ -504,6 +507,7 @@ def criar_contexto() -> dict:
     return {
         'erros': [],
         'arvore_anotada': [],
+        'pilha_nos': [],
         'pilha_tipos': [],
         'pilha_valores': [],
         'idx_valor': 0,
@@ -523,15 +527,17 @@ def consumir_literal(ctx: dict, tokens_proc: list, tipo: str, linha: int) -> Non
     valor = tokens_proc[ctx['idx_valor']]
     ctx['idx_valor'] += 1
 
-    ctx['pilha_tipos'].append(tipo)
-    ctx['pilha_valores'].append(valor)
-
-    ctx['arvore_anotada'].append({
+    no_literal = {
         'tipo_no': 'LITERAL',
         'tipo_inferido': tipo,
         'valor': valor,
         'linha': linha
-    })
+    }
+
+    ctx['pilha_nos'].append(no_literal)
+    ctx['pilha_tipos'].append(tipo)
+    ctx['pilha_valores'].append(valor)
+    ctx['arvore_anotada'].append(no_literal)
 
 def processar_identificador(ctx: dict, tokens_proc: list, tabela_simbolos: dict, atribuicoes: set, linha: int) -> dict:
     if ctx['idx_valor'] >= len(tokens_proc):
@@ -566,16 +572,17 @@ def processar_identificador(ctx: dict, tokens_proc: list, tabela_simbolos: dict,
 
         ctx['memorias_decl_nesta_linha'].add(nome)
 
-        ctx['pilha_tipos'].append(tipo_valor)
-        ctx['pilha_valores'].append(valor)
-
-        ctx['arvore_anotada'].append({
-            'tipo_no': 'ATRIBUICAO',
+        no_leitura = {
+            'tipo_no': 'LEITURA_VARIAVEL',
             'tipo_inferido': tipo_valor,
             'nome': nome,
-            'valor': valor,
             'linha': linha
-        })
+        }
+
+        ctx['pilha_nos'].append(no_leitura)
+        ctx['pilha_tipos'].append(tipo_valor)
+        ctx['pilha_valores'].append(valor)
+        ctx['arvore_anotada'].append(no_leitura)
 
         return tabela_simbolos
 
@@ -601,15 +608,18 @@ def processar_identificador(ctx: dict, tokens_proc: list, tabela_simbolos: dict,
         valor = info.get('valor')
         marcarSimboloUsado(tabela_simbolos, nome, linha)
 
-    ctx['pilha_tipos'].append(tipo)
-    ctx['pilha_valores'].append(valor)
 
-    ctx['arvore_anotada'].append({
+    no_leitura = {
         'tipo_no': 'LEITURA_VARIAVEL',
         'tipo_inferido': tipo,
         'nome': nome,
         'linha': linha
-    })
+    }
+
+    ctx['pilha_tipos'].append(tipo)
+    ctx['pilha_valores'].append(valor)
+    ctx['pilha_nos'].append(no_leitura)
+    ctx['arvore_anotada'].append(no_leitura)
 
     return tabela_simbolos
 
@@ -682,6 +692,15 @@ def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: li
         idx_resultado = len(historico_resultados) - 1 - n
         tipo_resultado = historico_resultados[idx_resultado].get('tipo', 'desconhecido')
 
+    no_res = {
+        'tipo_no': 'RES',
+        'tipo_inferido': tipo_resultado,
+        'parametro': n,
+        'linha': numero_linha
+    }
+
+    ctx['pilha_nos'].append(no_res)
+    ctx['arvore_anotada'].append(no_res)
     ctx['pilha_tipos'].append(tipo_resultado)
     ctx['pilha_valores'].append(None)
 
@@ -692,176 +711,136 @@ def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: li
         'linha': numero_linha
     })
 
-def processar_operador_aritmetico(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int) -> None:
-    regra = regras_semanticas.get('operadores_aritmeticos', {}).get(simbolo, {'aceita': [], 'aceita_base': []})
+def processar_operador_aritmetico(ctx: dict, simbolo: str, regras_semanticas: dict, linha: int) -> None:
+
+    regra = regras_semanticas.get('operadores_aritmeticos', {}).get(simbolo, {'aceita': []})
 
     ctx['idx_valor'] += 1
 
-    if len(ctx['pilha_tipos']) < 2:
+    # Precisa ter pelo menos dois tipos na pilha
+    if len(ctx['pilha_tipos']) < 2 or len(ctx['pilha_nos']) < 2:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
-            f"Operador '{simbolo}' requer dois operandos (insuficientes)"
+            f"ERRO SEMÂNTICO [Linha {linha}]: "
+            f"Operação '{simbolo}' requer dois operandos."
         )
         return
 
+    # TIPOS
     tipo2 = ctx['pilha_tipos'].pop()
     tipo1 = ctx['pilha_tipos'].pop()
 
-    if ctx['pilha_valores']:
-        ctx['pilha_valores'].pop()
-    if ctx['pilha_valores']:
-        ctx['pilha_valores'].pop()
+    # VALORES
+    val2 = ctx['pilha_valores'].pop() if ctx['pilha_valores'] else None
+    val1 = ctx['pilha_valores'].pop() if ctx['pilha_valores'] else None
 
-    if simbolo == '^':
-        base_valida = tipo1 in regra.get('aceita_base', [])
-        exp_valido = tipo2 == 'int'
+    # NÓS
+    no2 = ctx['pilha_nos'].pop()
+    no1 = ctx['pilha_nos'].pop()
 
-        if not base_valida:
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Base inválida para '^' ({tipo1})")
-        if not exp_valido:
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: Expoente deve ser int (recebido '{tipo2}')")
+    # Verificação de tipos
+    if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
+        ctx['erros'].append(
+            f"ERRO SEMÂNTICO [Linha {linha}]: "
+            f"Operação '{simbolo}' inválida entre '{tipo1}' e '{tipo2}'."
+        )
 
-        tipo_resultado = promoverTipo(tipo1, 'int')
+    # Tipo resultante
+    tipo_resultado = regra.get('resultado', tipo1)
 
-    elif simbolo in ['/', '%']:
-        if tipo1 != 'int' or tipo2 != 'int':
-            ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
-                f"Operador '{simbolo}' exige inteiros ({tipo1}, {tipo2})"
-            )
-        tipo_resultado = 'int'
-
-    elif simbolo == '|':
-        if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
-            ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
-                f"Operador '|' exige operandos numéricos"
-            )
-        tipo_resultado = 'float'
-
-    else:
-        if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
-            ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
-                f"Tipos incompatíveis para '{simbolo}' ({tipo1}, {tipo2})"
-            )
-        tipo_resultado = promoverTipo(tipo1, tipo2)
-
-    ctx['pilha_tipos'].append(tipo_resultado)
-    ctx['pilha_valores'].append(None)
-
-    ctx['arvore_anotada'].append({
+    # Criar nó de operação
+    no_oper = {
         'tipo_no': 'OPERACAO',
         'operador': simbolo,
         'tipo_inferido': tipo_resultado,
-        'operandos': [tipo1, tipo2],
-        'linha': numero_linha
-    })
+        'operandos': [no1, no2],
+        'linha': linha
+    }
+
+    # Empilhar resultado
+    ctx['pilha_nos'].append(no_oper)
+    ctx['pilha_tipos'].append(tipo_resultado)
+    ctx['pilha_valores'].append(None)
+
+    # Inserir na árvore
+    ctx['arvore_anotada'].append(no_oper)
 
 def processar_comparacao(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int) -> None:
     regra = regras_semanticas.get('operadores_relacionais', {}).get(simbolo, {'aceita': []})
 
     ctx['idx_valor'] += 1
 
-    if len(ctx['pilha_tipos']) < 2:
+    if len(ctx['pilha_tipos']) < 2 or len(ctx['pilha_nos']) < 2:
         ctx['erros'].append(
             f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
             f"Comparação '{simbolo}' requer dois operandos"
         )
         return
 
+    # Pega os dois operandos reais da AST
+    no2 = ctx['pilha_nos'].pop()
+    no1 = ctx['pilha_nos'].pop()
+
     tipo2 = ctx['pilha_tipos'].pop()
     tipo1 = ctx['pilha_tipos'].pop()
 
-    if ctx['pilha_valores']:
-        ctx['pilha_valores'].pop()
-    if ctx['pilha_valores']:
-        ctx['pilha_valores'].pop()
-
+    # validação
     if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
         ctx['erros'].append(
             f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
             f"Comparação '{simbolo}' inválida entre '{tipo1}' e '{tipo2}'"
         )
 
-    tipo_resultado = 'booleano'
-
-    ctx['pilha_tipos'].append(tipo_resultado)
-    ctx['pilha_valores'].append(None)
-
-    ctx['arvore_anotada'].append({
+    # cria nó estruturado
+    no_comparacao = {
         'tipo_no': 'COMPARACAO',
         'operador': simbolo,
-        'tipo_inferido': tipo_resultado,
-        'operandos': [tipo1, tipo2],
+        'tipo_inferido': 'booleano',
+        'operandos': [no1, no2],
         'linha': numero_linha
-    })
+    }
 
-def processar_estrutura_controle(ctx: dict, simbolo: str, numero_linha: int) -> None:
-    ctx['idx_valor'] += 1
+    # empilha o nó – ESSENCIAL PARA O WHILE FUNCIONAR
+    ctx['pilha_nos'].append(no_comparacao)
+    ctx['pilha_tipos'].append('booleano')
 
-    if simbolo == 'if':
-        if len(ctx['pilha_tipos']) < 3:
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF incompleto")
+def processar_estrutura_controle(ctx, tipo, numero_linha):
+    """
+    Monta nó AST corretamente para IF e WHILE.
+    No seu formato, o padrão é pós-fixo:
+        <cond> <corpo> WHILE
+    """
+
+    if tipo == 'while':
+        # WHILE precisa de: condição + corpo
+        if len(ctx['pilha_nos']) < 2:
+            ctx['erros'].append(
+                f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE mal formado."
+            )
             return
 
-        tipo_else = ctx['pilha_tipos'].pop()
-        tipo_then = ctx['pilha_tipos'].pop()
-        tipo_cond = ctx['pilha_tipos'].pop()
+        corpo = ctx['pilha_nos'].pop()     # último elemento
+        cond = ctx['pilha_nos'].pop()      # penúltimo
 
-        if ctx['pilha_valores']:
-            ctx['pilha_valores'].pop()
-        if ctx['pilha_valores']:
-            ctx['pilha_valores'].pop()
-        if ctx['pilha_valores']:
-            ctx['pilha_valores'].pop()
-
-        if tipo_cond != 'booleano':
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF requer condição booleana")
-
-        tipo_resultado = promoverTipo(tipo_then, tipo_else)
-
-        ctx['pilha_tipos'].append(tipo_resultado)
-        ctx['pilha_valores'].append(None)
-
-        ctx['arvore_anotada'].append({
-            'tipo_no': 'CONDICIONAL_IF',
-            'tipo_inferido': tipo_resultado,
-            'tipo_condicao': tipo_cond,
-            'tipos_ramos': [tipo_then, tipo_else],
-            'linha': numero_linha
-        })
-        return
-
-    if simbolo == 'while':
-        if len(ctx['pilha_tipos']) < 2:
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE incompleto")
-            return
-
-        tipo_corpo = ctx['pilha_tipos'].pop()
-        tipo_cond = ctx['pilha_tipos'].pop()
-
-        if ctx['pilha_valores']:
-            ctx['pilha_valores'].pop()
-        if ctx['pilha_valores']:
-            ctx['pilha_valores'].pop()
-
-        if tipo_cond != 'booleano':
-            ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE requer condição booleana")
-
-        tipo_resultado = tipo_corpo
-
-        ctx['pilha_tipos'].append(tipo_resultado)
-        ctx['pilha_valores'].append(None)
-
-        ctx['arvore_anotada'].append({
+        no = {
             'tipo_no': 'LOOP_WHILE',
-            'tipo_inferido': tipo_resultado,
-            'tipo_condicao': tipo_cond,
-            'tipo_corpo': tipo_corpo,
-            'linha': numero_linha
-        })
-        return
+            'tipo_condicao': cond.get('tipo_inferido', 'desconhecido'),
+            'filhos': [cond, corpo]
+        }
+
+        ctx['pilha_nos'].append(no)
+        ctx['arvore_anotada'].append(no)
+
+def processar_relacional(op, no1, no2, tac):
+    t1 = no1['temp']
+    t2 = no2['temp']
+    t3 = novo_temp()
+
+    tac.append(f"{t3} = {t1} {op} {t2}")
+
+    return {
+        'temp': t3,
+        'tipo': 'bool'
+    }
 
 def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: dict, regras_semanticas: dict, historico_resultados: list, numero_linha: int):
     ctx = criar_contexto()
@@ -1169,62 +1148,140 @@ def gerar_tac_if(no: dict, tac: list) -> dict:
         'kind': 'temp'
     }
 
-def gerar_tac_while(no: dict, tac: list) -> dict:
-    """
-    Gera TAC para estrutura de repetição WHILE.
-    Formato: (condição corpo WHILE)
-    """
-    tipo_resultado = no.get('tipo_inferido', 'int')
-    
-    # Cria labels
+def gerar_tac_while(no, tac):
+    # print("DEBUG: gerar_tac_while received node:", no)
+
+    filhos = no.get('filhos') or []
+    if not filhos:
+        raise Exception("gerar_tac_while: nó WHILE sem filhos")
+
+    # --- 1) tentativa rápida: localizar um filho que já seja um nó de comparação/booleano ---
+    cond_node = None
+    for filho in filhos:
+        if isinstance(filho, dict):
+            if filho.get('tipo_no') == 'COMPARACAO' or filho.get('tipo_inferido') == 'booleano':
+                cond_node = filho
+                break
+
+    # --- 2) se não encontrou, processe filhos e veja retorno de processar_no_tac ---
+    cond_info = None
+    if cond_node is None:
+        # processar cada filho e avaliar o resultado retornado
+        for filho in filhos:
+            # proteja contra strings/literais que processar_no_tac não espera
+            try:
+                info = processar_no_tac(filho, tac)
+            except Exception as e:
+                # se processar_no_tac lançar, registre e continue
+                # print(f"DEBUG: processar_no_tac raised for filho {filho}: {e}")
+                info = None
+
+            # info pode ser dict com várias formas — detecte booleano de forma tolerante
+            if isinstance(info, dict):
+                # checa chaves possíveis
+                tipo = info.get('tipo') or info.get('tipo_inferido') or info.get('kind')
+                if tipo in ('booleano', 'bool', True):  # incluir variações
+                    cond_info = info
+                    # se esse filho também for AST comparacao, capture-o
+                    if isinstance(filho, dict) and filho.get('tipo_no') == 'COMPARACAO':
+                        cond_node = filho
+                    break
+
+        # se encontrou cond_info mas não cond_node, talvez info tem temp mas AST filho não é explicito
+        if cond_info is not None and cond_node is None:
+            # tentar localizar qual filho produziu esse temp (procure por filho cujo processar_no_tac retornou igual info)
+            # Para simplicidade, vamos reprocessar filhos até achar o que gera booleano e marcar como cond_node.
+            for filho in filhos:
+                try:
+                    info2 = processar_no_tac(filho, tac)
+                except Exception:
+                    info2 = None
+                if isinstance(info2, dict):
+                    tipo2 = info2.get('tipo') or info2.get('tipo_inferido')
+                    if tipo2 in ('booleano', 'bool', True):
+                        cond_info = info2
+                        cond_node = filho
+                        break
+
+    else:
+        # encontramos um cond_node (AST) — agora processe-o para obter um temp/retorno se necessário
+        try:
+            cond_info = processar_no_tac(cond_node, tac)
+        except Exception:
+            cond_info = None
+
+    # --- 3) Verificações finais: temos cond_node/cond_info?
+    if cond_node is None and cond_info is None:
+        # para diagnóstico, liste filhos e seus tipos/tipo_no
+        # print("DEBUG: WHILE children (no condition found):")
+        # for f in filhos:
+        #     print("  child:", f, "is_dict:", isinstance(f, dict), "tipo_no:", (f.get('tipo_no') if isinstance(f, dict) else None))
+        raise Exception("ERRO: WHILE requer condição booleana; nenhum filho produziu booleano")
+
+    # Se temos só cond_node (AST) mas cond_info sem temp, reprocessar cond_node para gerar temp
+    if cond_info is None and cond_node is not None:
+        cond_info = processar_no_tac(cond_node, tac)
+
+    # final sanity: certifique-se que cond_info tenha 'temp' e um tipo booleano
+    tipo_cond = None
+    if isinstance(cond_info, dict):
+        tipo_cond = cond_info.get('tipo') or cond_info.get('tipo_inferido')
+    if tipo_cond not in ('booleano', 'bool'):
+        # permitir 'booleano' palavra em português (usada no seu código) — se não, falha com diagnóstico
+        raise Exception(f"ERRO: WHILE requer condição booleana; encontrado: {cond_info}")
+
+    temp_cond = cond_info.get('temp')
+    if not temp_cond:
+        # talvez o nó comparacao tenha operandos, mas não gerou temp — tente gerar TAC da comparação explícita
+        if isinstance(cond_node, dict) and cond_node.get('tipo_no') == 'COMPARACAO':
+            # extrair operandos — eles devem ser nós que já contêm 'temp' (ou gerar eles)
+            opnds = cond_node.get('operandos', [])
+            if len(opnds) >= 2:
+                # garanta que operandos tenham temp (processando-os se necessário)
+                a_info = processar_no_tac(opnds[0], tac) if not opnds[0].get('temp') else opnds[0]
+                b_info = processar_no_tac(opnds[1], tac) if not opnds[1].get('temp') else opnds[1]
+                a_temp = (a_info.get('temp') if isinstance(a_info, dict) else opnds[0].get('temp'))
+                b_temp = (b_info.get('temp') if isinstance(b_info, dict) else opnds[1].get('temp'))
+                if not a_temp or not b_temp:
+                    raise Exception("gerar_tac_while: não foi possível obter temps dos operandos da comparação")
+                # criar temp para a comparação
+                temp_cond = novo_temp()
+                tac.append({
+                    'op': 'cmp',
+                    'operador': cond_node.get('operador'),
+                    'a': a_temp,
+                    'b': b_temp,
+                    'dest': temp_cond,
+                    'tipo': 'booleano'
+                })
+            else:
+                raise Exception("gerar_tac_while: nó COMPARACAO sem operandos")
+        else:
+            raise Exception("gerar_tac_while: condição não tem temp e não é COMPARACAO")
+
+    # --- 4) emitir labels e ifFalse
     label_inicio = novo_label()
     label_fim = novo_label()
-    
-    # Temporário para o resultado
-    temp_resultado = novo_temp()
-    
-    # Label de início do loop
-    tac.append({
-        'op': 'label',
-        'dest': label_inicio,
-        'comment': 'while loop start'
-    })
-    
-    # Avaliação da condição
-    tac.append({
-        'op': 'ifFalse',
-        'dest': label_fim,
-        'tipo': 'booleano',
-        'comment': 'while condition check'
-    })
-    
-    # Corpo do loop (será processado posteriormente)
-    tac.append({
-        'op': '=',
-        'dest': temp_resultado,
-        'tipo': tipo_resultado,
-        'comment': 'loop body result'
-    })
-    
-    # Salto de volta para o início
-    tac.append({
-        'op': 'goto',
-        'dest': label_inicio,
-        'comment': 'repeat loop'
-    })
-    
-    # Label de fim do loop
-    tac.append({
-        'op': 'label',
-        'dest': label_fim,
-        'comment': 'while loop end'
-    })
-    
-    return {
-        'temp': temp_resultado,
-        'tipo': tipo_resultado,
-        'kind': 'temp'
-    }
+
+    # adicionar início
+    tac.append({'op': 'label', 'dest': label_inicio, 'comment': 'while loop start'})
+
+    # ifFalse usando temp_cond (pode ser dict temp_cond string)
+    tac.append({'op': 'ifFalse', 'a': temp_cond, 'dest': label_fim, 'tipo': 'booleano'})
+
+    # processar corpo: todos os filhos que não são a condição AST
+    for filho in filhos:
+        if filho is cond_node:
+            continue
+        # processar o nó do corpo (pode ser bloco ou várias instruções)
+        processar_no_tac(filho, tac)
+
+    # salto e fim
+    tac.append({'op': 'goto', 'dest': label_inicio})
+    tac.append({'op': 'label', 'dest': label_fim, 'comment': 'while loop end'})
+
+    # retorna info opcional
+    return {'temp': None, 'tipo': 'void', 'kind': 'temp'}
 
 def gerar_tac_res(no: dict, tac: list) -> dict:
     """
@@ -1793,28 +1850,1206 @@ def salvar_tac_otimizado(tac: list, nome_arquivo: str = 'tac_otimizado.txt') -> 
 # PREPARAÇÃO PARA GERAÇÃO DE ASSEMBLY (Aluno 3)
 # ========================================
 
-def gerarAssembly(tacOtimizado: list, tabela_simbolos: dict) -> list:
-    """
-    Gera código Assembly AVR a partir do TAC otimizado.
-    
-    Esta função será implementada pelo Aluno 3.
-    
-    Parâmetros:
-        tacOtimizado: Lista de instruções TAC após otimização
-        tabela_simbolos: Tabela de símbolos com informações de variáveis
-        
-    Retorna:
-        Lista de linhas de código Assembly
-    """
-    # TODO: Implementar geração de Assembly (Aluno 3)
-    assembly = []
-    assembly.append("; Assembly AVR para Arduino Uno (ATmega328P)")
-    assembly.append("; TODO: Implementar geração de código")
-    return assembly
+TEMP_COUNTER = 0
+def novo_temp():
+    global TEMP_COUNTER
+    TEMP_COUNTER += 1
+    return f"t{TEMP_COUNTER}"
 
-# ========================================
-# FUNÇÃO MAIN (Aluno 4)
-# ========================================
+# seção dados e helpers
+def mapear_variaveis(tac, tabela_simbolos):
+    """Mapeia todas as variáveis usadas no TAC"""
+    vars_map = {}
+    
+    for inst in tac:
+        # Verifica todos os campos que podem conter variáveis
+        for campo in ["a", "b", "dest"]:
+            val = inst.get(campo)
+            
+            if val and isinstance(val, str):
+                # Ignora labels, registradores e operadores
+                if (not val.startswith('L') and 
+                    not val.startswith('r') and 
+                    not val.startswith('t') and
+                    val not in ['label', 'goto', 'ifFalse', 'print'] and
+                    len(val) > 0):
+                    
+                    # Adiciona variável ao mapa
+                    if val not in vars_map:
+                        vars_map[val] = ".word 0"
+    
+    # Adiciona variáveis da tabela de símbolos
+    for var_name in tabela_simbolos.keys():
+        if var_name not in vars_map:
+            vars_map[var_name] = ".word 0"
+    
+    return vars_map
+
+def gerar_secao_dados(vars_map):
+    data_lines = ["\n"] 
+    data_lines.append(".data")
+    
+    for var_name, var_init in vars_map.items():
+        # Remove ponto inicial se houver
+        clean_name = var_name.lstrip('.')
+        data_lines.append(f"{clean_name}: .word 0  ; variável {clean_name}")
+    
+    data_lines.append("\n; === SEÇÃO DE CÓDIGO ===")
+    data_lines.append(".text")
+    
+    return "\n".join(data_lines)
+
+# gerar carregamento de operando
+def carregar_operando(op, regL, regH):
+    """Gera código para mover variável/imediato → registradores (little-endian: low em regL)"""
+    if isinstance(op, (int, float)):
+        # Se for float, converte para IEEE 754
+        if isinstance(op, float):
+            ieee_value = float_to_ieee754_half(op)
+            lo = ieee_value & 0xFF
+            hi = (ieee_value >> 8) & 0xFF
+        else:
+            lo = op & 0xFF
+            hi = (op >> 8) & 0xFF
+        return f"\n    ldi {regL}, 0x{lo:02X}\n    ldi {regH}, 0x{hi:02X}\n"
+    elif isinstance(op, str):
+        if "." in op:
+            op = float(op)
+            ieee_value = float_to_ieee754_half(op)
+            lo = ieee_value & 0xFF
+            hi = (ieee_value >> 8) & 0xFF
+        else:
+            op = int(op)
+            lo = op & 0xFF
+            hi = (op >> 8) & 0xFF
+        return f"\n    ldi {regL}, 0x{lo:02X}\n    ldi {regH}, 0x{hi:02X}\n"
+    else:
+        # assume label word (little endian)
+        return f"\n    lds {regL}, {op}\n    lds {regH}, {op}+1\n"
+
+# rotinas aritméticas já previstas (simplificadas)
+def gerar_mul16():
+    return """
+    ; --- MUL16: A=r22:r23, B=r24:r25 => Ret=r20:r21 ---
+    clr  r20
+    clr  r21
+
+    mul  r23, r25
+    mov  r20, r0
+    mov  r21, r1
+
+    mul  r22, r25
+    add  r21, r0
+
+    mul  r23, r24
+    add  r21, r0
+
+    clr  r1
+"""
+
+def gerar_div16():
+    return """
+    ; --- DIV16 por subtrações sucessivas ---
+    clr  r20
+    clr  r21
+
+div_loop:
+    cp   r22, r24
+    cpc  r23, r25
+    brlo div_done
+
+    sub  r23, r25
+    sbc  r22, r24
+
+    inc  r21
+    brne div_loop
+    inc  r20
+    rjmp div_loop
+
+div_done:
+    ; resto em r22:r23, quociente em r20:r21
+"""
+
+def gerar_pow16():
+    return """
+    ; --- POW16: A^B, A=r22:r23, B=r24:r25 ---
+    ; implementação simples por multiplicações sucessivas (assume Expoente 8-bit)
+    ldi r20, 1
+    ldi r21, 0
+    tst r25
+    brne pow_loop
+    tst r24
+    breq pow_end
+pow_loop:
+    ; multiplicar r20:r21 *= r22:r23
+    ; salva ret em r26:r27 e A em r28:r29 para uso do mul sequence
+    movw r26, r20
+    movw r28, r22
+
+    clr r20
+    clr r21
+
+    mul r27, r29
+    mov r20, r0
+    mov r21, r1
+
+    mul r26, r29
+    add r21, r0
+
+    mul r27, r28
+    add r21, r0
+
+    clr r1
+
+    ; decrementa expoente (r24:r25)
+    subi r24, 1
+    sbci r25, 0
+    tst r24
+    brne pow_loop
+    tst r25
+    brne pow_loop
+pow_end:
+"""
+
+# Routines UART / print hex (16-bit)
+ROTINAS_UART = r"""
+UART_init:
+    ldi r16, 0
+    sts UBRR0H, r16
+    ldi r16, 103              ; baud 9600 para 16MHz
+    sts UBRR0L, r16
+    ldi r16, (1<<TXEN0)       ; ativa transmissor
+    sts UCSR0B, r16
+    ldi r16, (1<<UCSZ01)|(1<<UCSZ00) ; 8N1
+    sts UCSR0C, r16
+    ret
+
+UART_sendByte:
+WaitTX:
+    lds r18, UCSR0A
+    sbrc r18, 5               ; UDRE0 bit 5 = buffer vazio?
+    rjmp UART_doSend
+    rjmp WaitTX
+UART_doSend:
+    sts UDR0, r24
+    ret
+
+UART_printHexNibble:
+    andi r24, 0x0F
+    cpi r24, 10
+    brlo DigitHex
+    subi r24, 10
+    ldi r18, 55               ; 'A' - 10
+    add r24, r18
+    rcall UART_sendByte
+    ret
+DigitHex:
+    ldi r18, 48               ; '0'
+    add r24, r18
+    rcall UART_sendByte
+    ret
+
+UART_printHex8:
+    push r18
+    push r19
+    mov r19, r24              ; salva original
+    swap r24
+    andi r24, 0x0F
+    rcall UART_printHexNibble
+    mov r24, r19
+    andi r24, 0x0F
+    rcall UART_printHexNibble
+    pop r19
+    pop r18
+    ret
+
+UART_printHex16:
+    push r18
+    push r19
+    ; High byte
+    mov r24, r25
+    rcall UART_printHex8
+    ; Espaço
+    ldi r24, ' '
+    rcall UART_sendByte
+    ; Low byte
+    rcall UART_printHex8
+    pop r19
+    pop r18
+    ret
+"""
+
+ROTINA_PRINT_IEEE754 = r"""
+; Imprime valor IEEE 754 half-precision como decimal
+; Entrada: r24:r25 = valor IEEE 754 half (little-endian)
+UART_printIEEE754:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r22
+    push r23
+    push r26
+    push r27
+    
+    ; r24 = low byte, r25 = high byte
+    ; Extrai sinal (bit 15)
+    mov r18, r25
+    andi r18, 0x80
+    breq ieee_positive
+    
+    ; Imprime sinal negativo
+    ldi r24, '-'
+    rcall UART_sendByte
+    
+ieee_positive:
+    ; Extrai expoente (bits 10-14) e mantissa (bits 0-9)
+    mov r19, r25        ; high byte
+    mov r20, r24        ; low byte
+    
+    ; Caso especial: zero
+    andi r19, 0x7F      ; remove sinal
+    or r19, r20
+    breq ieee_print_zero
+    
+    ; Verifica se é zero (expoente e mantissa = 0)
+    mov r19, r25
+    andi r19, 0x7C      ; bits 10-14 (expoente >> 2)
+    breq ieee_print_zero
+    
+    ; Converte para decimal aproximado (simplificado)
+    ; Para valores pequenos, usa conversão direta
+    ; Para produção, implementar conversão completa IEEE 754
+    
+    ; Implementação simplificada: usa tabela de lookup ou aproximação
+    ; Por ora, imprime em hexadecimal com prefixo
+    ldi r24, '0'
+    rcall UART_sendByte
+    ldi r24, 'x'
+    rcall UART_sendByte
+    
+    mov r24, r25
+    rcall UART_printHex8
+    mov r24, r20
+    rcall UART_printHex8
+    
+    rjmp ieee_end
+    
+ieee_print_zero:
+    ldi r24, '0'
+    rcall UART_sendByte
+    ldi r24, '.'
+    rcall UART_sendByte
+    ldi r24, '0'
+    rcall UART_sendByte
+    
+ieee_end:
+    pop r27
+    pop r26
+    pop r23
+    pop r22
+    pop r21
+    pop r20
+    pop r19
+    pop r18
+    ret
+
+; Converte int16 para IEEE 754 half-precision
+; Entrada: r22:r23 = inteiro (little-endian)
+; Saída: r20:r21 = IEEE 754 half
+int_to_ieee754:
+    push r18
+    push r19
+    push r24
+    push r25
+    
+    ; Verifica se é zero
+    or r22, r23
+    breq int_ieee_zero
+    
+    ; Extrai sinal
+    clr r18             ; sinal = 0 (positivo)
+    mov r19, r23
+    andi r19, 0x80
+    breq int_ieee_pos
+    
+    ; Negativo: complemento de 2
+    ldi r18, 0x80       ; sinal = 1
+    com r22
+    com r23
+    inc r22
+    brne int_ieee_pos
+    inc r23
+    
+int_ieee_pos:
+    ; Encontra bit mais significativo (normaliza)
+    ; Simplificação: assume valores pequenos (< 1024)
+    ; Expoente = 15 + posição do MSB
+    
+    ldi r24, 15 + 10    ; expoente base + offset mantissa
+    mov r25, r23
+    
+    ; Conta zeros à esquerda (simplificado para 8 bits)
+ieee_norm_loop:
+    sbrc r25, 7
+    rjmp ieee_norm_done
+    lsl r22
+    rol r23
+    dec r24
+    rjmp ieee_norm_loop
+    
+ieee_norm_done:
+    ; Monta IEEE 754
+    ; r24 = expoente, r22:r23 = mantissa normalizada
+    ; Remove bit implícito (MSB)
+    lsl r22
+    rol r23
+    
+    ; r20 = low byte, r21 = high byte
+    mov r20, r22
+    mov r21, r23
+    lsr r21
+    lsr r21             ; ajusta mantissa para 10 bits
+    
+    ; Insere expoente
+    mov r25, r24
+    lsl r25
+    lsl r25             ; expoente << 2
+    or r21, r25
+    
+    ; Insere sinal
+    or r21, r18
+    
+    rjmp int_ieee_end
+    
+int_ieee_zero:
+    clr r20
+    clr r21
+    
+int_ieee_end:
+    pop r25
+    pop r24
+    pop r19
+    pop r18
+    ret
+"""
+
+OPERACOES_IEEE754 = r"""
+; Operações IEEE 754 half-precision - adaptadas à convenção:
+; Temporários: r16..r23
+; Parâmetros/Retorno: r24:r25
+; Entrada para cada binary op: A em r18:r19, B em r20:r21
+; Internamente rotinas usam r22:r23 (A) e r24:r25 (B) como antes;
+; No retorno, resultado ficará em r24:r25.
+
+; -----------------------------
+; f16_extract (sem alteração de ABI interna)
+; entrada: r22:r23
+; saídas temporárias usadas: r26..r31
+; retorna:
+;  r26 = sign (0/1)
+;  r27 = exponent (0..31)
+;  r28:r29 = mantissa (10 bits)
+; -----------------------------
+f16_extract:
+    ; r22 = low, r23 = high
+    mov r26, r23
+    andi r26, 0x80
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+    lsr r26
+
+    mov r27, r23
+    andi r27, 0x7C
+    lsr r27
+    lsr r27
+    lsr r27
+    lsr r27
+    lsr r27
+
+    andi r23, 0x03
+    mov r28, r22
+    mov r29, r23
+    ret
+
+; --------------------------------------------------
+; f16_pack (sem alteração importante)
+; Empacota sign (r26), exponent (r27), mantissa r28:r29 -> r22:r23
+; --------------------------------------------------
+f16_pack:
+    mov r30, r27
+    lsl r30
+    lsl r30
+    lsl r30
+    lsl r30
+    lsl r30
+    mov r31, r27
+    lsl r31
+    lsl r31
+    lsl r31
+    lsl r31
+    mov r30, r27
+    lsl r30
+    lsl r30
+    andi r30, 0xF8
+    mov r31, r29
+    andi r31, 0x03
+    lsl r31
+    lsl r31
+    mov r29, r26
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    lsl r29
+    mov r22, r28
+    mov r23, r30
+    or r23, r31
+    or r23, r29
+    ret
+
+; --------------------------------------------------
+; f16_add
+; agora: espera A em r18:r19 e B em r20:r21; retorna em r24:r25
+; interna: trabalha em r22:r23 (A) e r24:r25 (B) como antes
+; --------------------------------------------------
+; --------------------------------------------------
+; f16_add (versão com branches long-safe)
+; espera A em r18:r19 e B em r20:r21; retorna em r24:r25
+; --------------------------------------------------
+f16_add:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r26
+    push r27
+    push r28
+    push r29
+
+    ; copiar entradas para convenção interna da rotina (r22:r23 = A, r24:r25 = B)
+    mov r22, r18
+    mov r23, r19
+    mov r24, r20
+    mov r25, r21
+
+    ; --- rotina original (sem outras modificações) ---
+    ; save A
+    mov r30, r22
+    mov r31, r23
+    mov r22, r30
+    mov r23, r31
+    rcall f16_extract
+    mov r16, r26
+    mov r17, r27
+    mov r18, r28
+    mov r19, r29
+    mov r22, r24
+    mov r23, r25
+    rcall f16_extract
+    mov r20, r26
+    mov r21, r27
+    mov r22, r28
+    mov r23, r29
+
+    or r18, r19
+    ; if equal (all zero) -> return_b  (original: breq .return_b)
+    brne .skip1
+    rjmp .return_b
+.skip1:
+    or r22, r23
+    ; if equal -> return_a  (original: breq .return_a)
+    brne .skip2
+    rjmp .return_a
+.skip2:
+    cp r17, r21
+    ; if greater or equal -> align_done  (original: brge .align_done)
+    brlt .skip3
+    rjmp .align_done
+.skip3:
+    mov r26, r16
+    mov r16, r20
+    mov r20, r26
+    mov r26, r17
+    mov r17, r21
+    mov r21, r26
+    mov r26, r18
+    mov r18, r22
+    mov r22, r26
+    mov r26, r19
+    mov r19, r23
+    mov r23, r26
+
+.align_done:
+    mov r26, r17
+    sub r26, r21
+    tst r26
+    ; if equal -> no_shift  (original: breq .no_shift)
+    brne .skip4
+    rjmp .no_shift
+.skip4:
+
+.shift_loop:
+    lsr r22
+    ror r23
+    dec r26
+    ; original: breq .skip_shift_loop  ; we invert and use rjmp
+    brne .skip5
+    rjmp .skip_shift_loop
+.skip5:
+    rjmp .shift_loop
+.skip_shift_loop:
+.no_shift:
+    tst r17
+    ; original: breq .a_denorm
+    brne .skip6
+    rjmp .a_denorm
+.skip6:
+
+    ori r19, (1<<2)
+.a_denorm:
+    tst r21
+    ; original: breq .b_denorm
+    brne .skip7
+    rjmp .b_denorm
+.skip7:
+
+    ori r23, (1<<2)
+.b_denorm:
+    cp r16, r20
+    ; original: breq .do_add
+    brne .skip8
+    rjmp .do_add
+.skip8:
+
+    mov r26, r19
+    cp r26, r23
+    ; original: brne .cmp_done
+    breq .skip9
+    rjmp .cmp_done
+.skip9:
+    mov r26, r18
+    cp r26, r22
+.cmp_done:
+    ; original: brlt .do_sub_swapped
+    brge .skip10
+    rjmp .do_sub_swapped
+.skip10:
+
+    sub r18, r22
+    sbc r19, r23
+    mov r16, r16
+    rjmp .normalize
+
+.do_sub_swapped:
+    sub r22, r18
+    sbc r23, r19
+    mov r18, r22
+    mov r19, r23
+    mov r16, r20
+    rjmp .normalize
+
+.do_add:
+    add r18, r22
+    adc r19, r23
+    mov r16, r16
+
+.normalize:
+    ldi r26, 4
+    cp r19, r26
+    ; original: brlo .norm_shift_left
+    brsh .skip11
+    rjmp .norm_shift_left
+.skip11:
+
+    lsr r18
+    ror r19
+    inc r17
+    rjmp .pack_result
+
+.norm_shift_left:
+    tst r19
+    ; original: brne .pack_result
+    breq .skip12
+    rjmp .pack_result
+.skip12:
+
+    lsl r18
+    rol r19
+    dec r17
+    ; original: brne .norm_shift_left
+    breq .skip13
+    rjmp .norm_shift_left
+.skip13:
+
+.pack_result:
+    mov r28, r18
+    mov r29, r19
+    mov r26, r16
+    mov r27, r17
+    mov r22, r28
+    mov r23, r29
+    rcall f16_pack
+    ; resultado está em r22:r23 (interno)
+    ; mover resultado para convenção externa (r24:r25)
+    mov r24, r22
+    mov r25, r23
+    rjmp .end
+
+.return_a:
+    mov r24, r30
+    mov r25, r31
+    rjmp .end
+
+.return_b:
+    mov r24, r24
+    mov r25, r25
+    rjmp .end
+
+.end:
+    pop r29
+    pop r28
+    pop r27
+    pop r26
+    pop r21
+    pop r20
+    pop r19
+    pop r18
+    ret
+
+; --------------------------------------------------
+; f16_mul
+; espera A em r18:r19, B em r20:r21; retorna em r24:r25
+; --------------------------------------------------
+f16_mul:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r26
+    push r27
+    push r28
+    push r29
+
+    ; copiar entradas
+    mov r22, r18
+    mov r23, r19
+    mov r24, r20
+    mov r25, r21
+
+    ; rotina original (aproximada)
+    mov r30, r22
+    mov r31, r23
+    rcall f16_extract
+    mov r16, r26
+    mov r17, r27
+    mov r18, r28
+    mov r19, r29
+    mov r22, r24
+    mov r23, r25
+    rcall f16_extract
+    mov r20, r26
+    mov r21, r27
+    mov r22, r28
+    mov r23, r29
+    or r18, r19
+    breq .zero_a
+    or r22, r23
+    breq .zero_b
+    eor r16, r20
+    mov r26, r17
+    add r26, r21
+    subi r26, 15
+    ori r19, (1<<2)
+    ori r23, (1<<2)
+    mov r24, r18
+    mov r25, r22
+    mul r24, r25
+    mov r26, r0
+    mov r27, r1
+    clr r0
+    clr r1
+    mov r22, r26
+    mov r23, r27
+    mov r17, r26
+    mov r26, r16
+    mov r28, r22
+    mov r29, r23
+    mov r27, r17
+    rcall f16_pack
+    mov r24, r22
+    mov r25, r23
+    jmp .mul_end
+.zero_a:
+    ldi r24, 0x00
+    ldi r25, 0x00
+    jmp .mul_end
+.zero_b:
+    ldi r24, 0x00
+    ldi r25, 0x00
+.mul_end:
+    pop r29
+    pop r28
+    pop r27
+    pop r26
+    pop r21
+    pop r20
+    pop r19
+    pop r18
+    ret
+
+; --------------------------------------------------
+; f16_div
+; espera A em r18:r19, B em r20:r21; retorna em r24:r25
+; --------------------------------------------------
+f16_div:
+    push r18
+    push r19
+    push r20
+    push r21
+    push r26
+    push r27
+    push r28
+    push r29
+
+    ; copiar entradas
+    mov r22, r18
+    mov r23, r19
+    mov r24, r20
+    mov r25, r21
+
+    mov r30, r22
+    mov r31, r23
+    rcall f16_extract
+    mov r16, r26
+    mov r17, r27
+    mov r18, r28
+    mov r19, r29
+    mov r22, r24
+    mov r23, r25
+    rcall f16_extract
+    mov r20, r26
+    mov r21, r27
+    mov r22, r28
+    mov r23, r29
+    or r22, r23
+    breq .div_by_zero
+    eor r16, r20
+    mov r26, r17
+    sub r26, r21
+    add r26, 15
+    mov r24, r18
+    mov r25, r19
+    mov r28, r22
+    mov r29, r23
+    ldi r30, 0x00
+    ldi r31, 0x00
+    ldi r27, 16
+.div_loop:
+    lsl r24
+    rol r25
+    lsl r30
+    rol r31
+    mov r26, r25
+    cp r26, r29
+    brlo .div_no_sub
+    sub r25, r29
+    sbc r24, r28
+    ori r31, 0x01
+.div_no_sub:
+    dec r27
+    brne .div_loop
+    mov r22, r30
+    mov r23, r31
+    mov r26, r16
+    mov r27, r26
+    mov r28, r22
+    mov r29, r23
+    rcall f16_pack
+    mov r24, r22
+    mov r25, r23
+    jmp .div_end
+.div_by_zero:
+    ldi r24, 0x00
+    ldi r25, 0x7C
+    jmp .div_end
+.div_end:
+    pop r29
+    pop r28
+    pop r27
+    pop r26
+    pop r21
+    pop r20
+    pop r19
+    pop r18
+    ret
+
+; --------------------------------------------------
+; print_hex16 - imprime r24:r25 (agora) em hex (placeholder)
+; --------------------------------------------------
+print_hex16:
+    ; conv hex nibble by nibble e rcall usart_transmit
+    ret
+"""
+
+def float_to_ieee754_half(value):
+    """
+    Converte um float Python para formato IEEE 754 half-precision (16 bits)
+    Formato: 1 bit sinal | 5 bits expoente | 10 bits mantissa
+    """
+    import struct
+    
+    # Casos especiais
+    if value == 0.0:
+        return 0x0000
+    if value != value:  # NaN
+        return 0x7E00
+    
+    # Extrai sinal
+    sign = 0 if value >= 0 else 1
+    value = abs(value)
+    
+    # Infinito
+    if value == float('inf'):
+        return (sign << 15) | 0x7C00
+    
+    # Converte para float32 primeiro para facilitar
+    bits32 = struct.unpack('>I', struct.pack('>f', value))[0]
+    
+    # Extrai componentes do float32
+    sign32 = (bits32 >> 31) & 0x1
+    exp32 = (bits32 >> 23) & 0xFF
+    mant32 = bits32 & 0x7FFFFF
+    
+    # Ajusta expoente (bias 127 -> bias 15)
+    exp16 = exp32 - 127 + 15
+    
+    # Overflow -> infinito
+    if exp16 >= 31:
+        return (sign << 15) | 0x7C00
+    
+    # Underflow -> zero
+    if exp16 <= 0:
+        return sign << 15
+    
+    # Trunca mantissa de 23 para 10 bits
+    mant16 = mant32 >> 13
+    
+    # Monta o half-precision
+    result = (sign << 15) | (exp16 << 10) | mant16
+    return result & 0xFFFF
+
+def int_to_ieee754_half(value_int):
+    """Converte inteiro para IEEE 754 half-precision"""
+    return float_to_ieee754_half(float(value_int))
+
+# Tradução de instrução TAC para assembly
+def traduzirInstrucaoTAC(inst):
+    op = inst.get("op")
+    if op in ["+", "-", "*", "/", "%", "|", "^"]:
+        return traduzirOperacaoAritmetica(inst)
+    elif op == "=":
+        return traduzirAtribuicao(inst)
+    elif op in ["<", ">", "<=", ">=", "==", "!="]:
+        return traduzirComparacao(inst)
+    elif op == "label":
+        return f"{inst['dest']}:\n"
+    elif op == "goto":
+        return f"\trjmp {inst['dest']}\n"
+    elif op == "ifgoto":
+        return traduzirIfGoto(inst)
+    elif op == "print":
+        return traduzirPrint(inst)
+    elif op == "ifFalse":
+        return traduzirIfFalse(inst)
+    else:
+        return f"; [ERRO] operação TAC não reconhecida: {op}\n"
+    
+def traduzirOperacaoAritmetica(inst):
+    """Traduz operação com suporte a IEEE 754 half-precision"""
+    A = inst.get("a")
+    B = inst.get("b")
+    D = inst.get("dest")
+    op = inst.get("op")
+    tipo = inst.get("tipo", "int")
+    tipo_a = inst.get("tipo_a", "int")
+    tipo_b = inst.get("tipo_b", "int")
+
+    codigo = f"\n; TAC: {D} = {A} {op} {B} (tipo: {tipo})\n"
+    
+    # Carrega operandos (low byte primeiro → regL, high byte → regH)
+    codigo += carregar_operando(A, "r18", "r19")  # A em r18:r19 (LO:HI)
+    codigo += carregar_operando(B, "r20", "r21")  # B em r20:r21 (LO:HI)
+    
+    # Converte int para IEEE 754 se necessário
+    if tipo == 'float':
+        if tipo_a == 'int':
+            codigo += "    movw r24, r18\n"
+            codigo += "    rcall int_to_ieee754\n"
+            codigo += "    movw r18, r24\n"
+
+        if tipo_b == 'int':
+            codigo += "    movw r24, r20\n"
+            codigo += "    rcall int_to_ieee754\n"
+            codigo += "    movw r20, r24\n"
+    
+    if tipo == "float":
+        if op == "+":
+            codigo += "    rcall f16_add\n"
+        elif op == "-":
+            codigo += "    rcall f16_sub\n"
+        elif op == "*":
+            codigo += "    rcall f16_mul\n"
+        elif op == "/":
+            codigo += "    rcall f16_div\n"
+
+    else:  # tipo int
+        if op == "+":
+            codigo += "    movw r24, r18\n"
+            codigo += "    add  r24, r20\n"
+            codigo += "    adc  r25, r21\n"
+
+        elif op == "-":
+            codigo += "    movw r24, r18\n"
+            codigo += "    sub  r24, r20\n"
+            codigo += "    sbc  r25, r21\n"
+
+        elif op == "*":
+            codigo += gerar_mul16("r18","r19","r20","r21","r24","r25")
+
+        elif op == "/":
+            codigo += gerar_div16("r18","r19","r20","r21","r24","r25")
+    
+    # -----------------------------------------------------------
+    # Salvar resultado final em memória
+    # -----------------------------------------------------------
+    codigo += f"    sts {D}, r24\n"
+    codigo += f"    sts {D}+1, r25\n"
+    
+    return codigo
+
+def traduzirAtribuicao(inst):
+    A = inst.get("a")
+    D = inst.get("dest")
+    tipo_a = inst.get("tipo_a", "int")
+    
+    codigo = f"\n; {D} = {A}\n"
+    
+    # Carrega valor em r20:r21
+    if isinstance(A, int):
+        lo = A & 0xFF
+        hi = (A >> 8) & 0xFF
+        codigo += f"    ldi r20, 0x{lo:02X}\n"
+        codigo += f"    ldi r21, 0x{hi:02X}\n"
+    elif isinstance(A, float) and tipo_a == 'float':
+        ieee_value = float_to_ieee754_half(A)
+        lo = ieee_value & 0xFF
+        hi = (ieee_value >> 8) & 0xFF
+        codigo += f"    ldi r20, 0x{lo:02X}\n"
+        codigo += f"    ldi r21, 0x{hi:02X}\n"
+    else:
+        # Carrega de outra variável
+        codigo += f"    lds r20, {A}\n"
+        codigo += f"    lds r21, {A}+1\n"
+    
+    # Armazena no destino
+    codigo += f"    sts {D}, r20\n"
+    codigo += f"    sts {D}+1, r21\n"
+    
+    return codigo
+
+def traduzirIfGoto(inst):
+    cond = inst.get("a")
+    destino = inst.get("dest")
+    return f"\n    lds r16, {cond}\n    cpi r16, 0\n    brne {destino}\n"
+
+def traduzirIfFalse(inst):
+    cond = inst.get("a")
+    destino = inst.get("dest")
+
+    codigo = f"\n; ifFalse {cond} goto {destino}\n"
+    
+    # Caso 1: condição é comparação (dict)
+    if isinstance(cond, dict) and cond.get("op") in ["<=", "<", ">", ">=", "==", "!="]:
+        op = cond["op"]
+        a = cond["a"]
+        b = cond["b"]
+
+        codigo += f"    lds r16, {a}\n"
+        codigo += f"    lds r17, {a}+1\n"
+        codigo += f"    lds r18, {b}\n"
+        codigo += f"    lds r19, {b}+1\n"
+
+        codigo += "    cp r16, r18\n"
+        codigo += "    cpc r17, r19\n"
+
+        if op == "<=": codigo += f"    brgt {destino}\n"
+        elif op == "<": codigo += f"    brge {destino}\n"
+        elif op == ">=": codigo += f"    brlt {destino}\n"
+        elif op == ">": codigo += f"    brle {destino}\n"
+        elif op == "==": codigo += f"    brne {destino}\n"
+        elif op == "!=": codigo += f"    breq {destino}\n"
+
+        return codigo
+
+    # Caso 2: condição é número ou variável (como INDICE)
+    else:
+        if isinstance(cond, int):
+            lo = cond & 0xFF
+            hi = (cond >> 8) & 0xFF
+            codigo += f"    ldi r16, 0x{lo:02X}\n"
+            codigo += f"    ldi r17, 0x{hi:02X}\n"
+        else:
+            codigo += f"    lds r16, {cond}\n"
+            codigo += f"    lds r17, {cond}+1\n"
+        
+        codigo += "    or r16, r17\n"
+        codigo += f"    breq {destino}\n"
+
+        return codigo
+
+def traduzirComparacao(inst):
+    """Gera código para comparação entre valores"""
+    A = inst.get("a")
+    B = inst.get("b")
+    D = inst.get("dest")
+    op = inst.get("op")
+    
+    codigo = f"\n; {D} = {A} {op} {B}\n"
+    
+    codigo += carregar_operando(A, "r18", "r19")
+    codigo += carregar_operando(B, "r20", "r21")
+
+    codigo += "    cp  r18, r20\n"
+    codigo += "    cpc r19, r21\n"
+
+    codigo += "    ldi r24, 0\n"
+    codigo += "    ldi r25, 0\n"
+    
+    # Define resultado baseado no operador
+    if op == "<":
+        codigo += "    brlo _cmp_true\n"
+    elif op == "<=":
+        codigo += "    brlo _cmp_true\n"
+        codigo += "    breq _cmp_true\n"
+    elif op == ">":
+        codigo += "    brsh _cmp_false\n"
+        codigo += "    rjmp _cmp_true\n"
+    elif op == ">=":
+        codigo += "    brlo _cmp_false\n"
+        codigo += "    rjmp _cmp_true\n"
+    elif op == "==":
+        codigo += "    breq _cmp_true\n"
+    elif op == "!=":
+        codigo += "    brne _cmp_true\n"
+
+    codigo += "    rjmp _cmp_end\n"
+    codigo += "_cmp_true:\n"
+    codigo += "    ldi r24, 1\n"
+    codigo += "_cmp_end:\n"
+
+    codigo += f"    sts {D}, r24\n"
+    codigo += f"    sts {D}+1, r25\n"
+    return codigo
+
+def traduzirPrint(inst):
+    """Imprime valor com formatação correta"""
+    A = inst.get("a")
+    tipo = inst.get("tipo_a", inst.get("tipo", "int"))
+    
+    codigo = f"\n; PRINT {A} (tipo: {tipo})\n"
+    
+    if isinstance(A, int):
+        lo = A & 0xFF
+        hi = (A >> 8) & 0xFF
+        codigo += f"    ldi r24, 0x{lo:02X}\n    ldi r25, 0x{hi:02X}\n"
+    else:
+        codigo += f"    lds r24, {A}\n    lds r25, {A}+1\n"
+    
+    if tipo == 'float':
+        codigo += "    rcall UART_printIEEE754\n"
+    else:
+        codigo += "    rcall UART_printHex16\n"
+    
+    # Adiciona newline SEMPRE
+    codigo += "    ldi r24, 0x0D\n    rcall UART_sendByte\n"  # CR
+    codigo += "    ldi r24, 0x0A\n    rcall UART_sendByte\n"  # LF
+    
+    return codigo
+
+def gerarAssembly(tacOtimizado, tabela_simbolos):
+    assembly = []
+    assembly.append(".equ RAMEND, 0x08FF")
+    assembly.append(".equ SPL, 0x3D")
+    assembly.append(".equ SPH, 0x3E")
+    assembly.append(".equ TXEN0, 0x03")
+    assembly.append(".equ UBRR0H, 0xC5")
+    assembly.append(".equ UBRR0L, 0xC4")
+    assembly.append(".equ UCSR0A, 0xC0")
+    assembly.append(".equ UCSR0B, 0xC1")
+    assembly.append(".equ UCSR0C, 0xC2")
+    assembly.append(".equ UCSZ00, 0x01")
+    assembly.append(".equ UCSZ01, 0x02")
+    assembly.append(".equ UDR0, 0xC6")
+
+    variaveis = mapear_variaveis(tacOtimizado, tabela_simbolos)
+    assembly.append(gerar_secao_dados(variaveis))
+
+    assembly.append("\n.global main")
+    assembly.append(ROTINAS_UART)
+    assembly.append(ROTINA_PRINT_IEEE754)
+    assembly.append(OPERACOES_IEEE754)
+
+    assembly.append("\n\nmain:\n    ; inicializa pilha\n    ldi r16, hi8(RAMEND)\n    out SPH, r16\n    ldi r16, lo8(RAMEND)\n    out SPL, r16\n")
+    assembly.append("    rcall UART_init\n")
+
+    # Teste inicial - imprime caractere de teste
+    assembly.append("\n    ; Teste inicial UART\n")
+    assembly.append("    ldi r24, 'O'\n")
+    assembly.append("    rcall UART_sendByte\n")
+    assembly.append("    ldi r24, 'K'\n")
+    assembly.append("    rcall UART_sendByte\n")
+    assembly.append("    ldi r24, 0x0D\n")
+    assembly.append("    rcall UART_sendByte\n")
+    assembly.append("    ldi r24, 0x0A\n")
+    assembly.append("    rcall UART_sendByte\n\n")
+
+    for inst in tacOtimizado:
+        codigo = traduzirInstrucaoTAC(inst)
+        assembly.append(codigo)
+
+    # Epílogo
+    assembly.append("\n; Fim do programa")
+    assembly.append("fim:")
+    assembly.append("    rjmp fim  ; Loop infinito\n")
+
+    texto = "\n".join(assembly)
+    linhas = texto.split("\n")
+    nova = []
+    vistos = set()
+
+    for linha in linhas:
+        stripped = linha.strip()
+        if stripped.endswith(":"):
+            if stripped in vistos:
+                continue
+            vistos.add(stripped)
+        nova.append(linha)
+
+    texto = "\n".join(nova)
+
+    with open("./src/saida.s", "w", encoding="utf-8") as f:
+        f.write(texto)
+
+    print("\n✓ Arquivo Assembly gerado: saida.s")
+    return assembly
 
 def main():
     """
@@ -1947,6 +3182,43 @@ def main():
     salvar_tac(tac_completo, f'{nome_base}_tac.txt')
     print(f"✓ TAC original: {nome_base}_tac.txt")
 
+    if historico_resultados:
+        # Pega o último resultado da tabela de símbolos ou última variável
+        ultima_linha = historico_resultados[-1]
+
+        # Procura por variáveis na última linha que foram modificadas
+        ultima_var = None
+        for nome, info in tabela_simbolos.items():
+            if info.get('linha_declaracao') == len(linhas):
+                ultima_var = nome
+                break
+
+        # Se não encontrou, usa a primeira variável declarada (FATORIAL no caso)
+        if not ultima_var and tabela_simbolos:
+            # Procura por FATORIAL ou a última variável declarada
+            for nome in ['FATORIAL', 'resultado', 'RES']:
+                if nome in tabela_simbolos:
+                    ultima_var = nome
+                    break
+
+            if not ultima_var:
+                # Usa qualquer variável
+                ultima_var = list(tabela_simbolos.keys())[-1]
+
+        if ultima_var:
+            tipo_var = tabela_simbolos[ultima_var].get('tipo', 'int')
+
+            print(f"Adicionando PRINT para variável: {ultima_var} (tipo: {tipo_var})")
+
+            # Adiciona instrução TAC para print
+            tac_completo.append({
+                'op': 'print',
+                'a': ultima_var,
+                'tipo': tipo_var,
+                'tipo_a': tipo_var,
+                'comment': f'print resultado final: {ultima_var}'
+            })
+
     # 5. Otimização de TAC
     tac_otimizado = otimizarTAC(tac_completo)
     salvar_tac_otimizado(tac_otimizado, f'{nome_base}_tac_otimizado.txt')
@@ -1959,6 +3231,8 @@ def main():
     # 7. Tabela de Símbolos
     gerar_relatorio_tabela_simbolos(tabela_simbolos, f'{nome_base}_simbolos.txt')
     print(f"✓ Tabela de símbolos: {nome_base}_simbolos.txt")
+
+    gerarAssembly(tac_otimizado, tabela_simbolos)
 
     # ========================================
     # RESUMO FINAL
