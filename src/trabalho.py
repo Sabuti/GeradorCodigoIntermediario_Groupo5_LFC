@@ -2451,7 +2451,18 @@ def carregar_operando(op, regL, regH):
         else:
             lo = op & 0xFF
             hi = (op >> 8) & 0xFF
-        return f"\n    ldi {regL}, {lo}\n    ldi {regH}, {hi}\n"
+        return f"\n    ldi {regL}, 0x{lo:02X}\n    ldi {regH}, 0x{hi:02X}\n"
+    elif isinstance(op, str):
+        if "." in op:
+            op = float(op)
+            ieee_value = float_to_ieee754_half(op)
+            lo = ieee_value & 0xFF
+            hi = (ieee_value >> 8) & 0xFF
+        else:
+            op = int(op)
+            lo = op & 0xFF
+            hi = (op >> 8) & 0xFF
+        return f"\n    ldi {regL}, 0x{lo:02X}\n    ldi {regH}, 0x{hi:02X}\n"
     else:
         # assume label word (little endian)
         return f"\n    lds {regL}, {op}\n    lds {regH}, {op}+1\n"
@@ -2849,6 +2860,10 @@ f16_pack:
 ; agora: espera A em r18:r19 e B em r20:r21; retorna em r24:r25
 ; interna: trabalha em r22:r23 (A) e r24:r25 (B) como antes
 ; --------------------------------------------------
+; --------------------------------------------------
+; f16_add (versão com branches long-safe)
+; espera A em r18:r19 e B em r20:r21; retorna em r24:r25
+; --------------------------------------------------
 f16_add:
     push r18
     push r19
@@ -2883,12 +2898,22 @@ f16_add:
     mov r21, r27
     mov r22, r28
     mov r23, r29
+
     or r18, r19
-    breq .return_b
+    ; if equal (all zero) -> return_b  (original: breq .return_b)
+    brne .skip1
+    rjmp .return_b
+.skip1:
     or r22, r23
-    breq .return_a
+    ; if equal -> return_a  (original: breq .return_a)
+    brne .skip2
+    rjmp .return_a
+.skip2:
     cp r17, r21
-    brge .align_done
+    ; if greater or equal -> align_done  (original: brge .align_done)
+    brlt .skip3
+    rjmp .align_done
+.skip3:
     mov r26, r16
     mov r16, r20
     mov r20, r26
@@ -2901,38 +2926,68 @@ f16_add:
     mov r26, r19
     mov r19, r23
     mov r23, r26
+
 .align_done:
     mov r26, r17
     sub r26, r21
     tst r26
-    breq .no_shift
+    ; if equal -> no_shift  (original: breq .no_shift)
+    brne .skip4
+    rjmp .no_shift
+.skip4:
+
 .shift_loop:
     lsr r22
     ror r23
     dec r26
-    brne .shift_loop
+    ; original: breq .skip_shift_loop  ; we invert and use rjmp
+    brne .skip5
+    rjmp .skip_shift_loop
+.skip5:
+    rjmp .shift_loop
+.skip_shift_loop:
 .no_shift:
     tst r17
-    breq .a_denorm
-    sbi r19, 2
+    ; original: breq .a_denorm
+    brne .skip6
+    rjmp .a_denorm
+.skip6:
+
+    ori r19, (1<<2)
 .a_denorm:
     tst r21
-    breq .b_denorm
-    sbi r23, 2
+    ; original: breq .b_denorm
+    brne .skip7
+    rjmp .b_denorm
+.skip7:
+
+    ori r23, (1<<2)
 .b_denorm:
     cp r16, r20
-    breq .do_add
+    ; original: breq .do_add
+    brne .skip8
+    rjmp .do_add
+.skip8:
+
     mov r26, r19
     cp r26, r23
-    brne .cmp_done
+    ; original: brne .cmp_done
+    breq .skip9
+    rjmp .cmp_done
+.skip9:
     mov r26, r18
     cp r26, r22
 .cmp_done:
-    brlt .do_sub_swapped
+    ; original: brlt .do_sub_swapped
+    brge .skip10
+    rjmp .do_sub_swapped
+.skip10:
+
     sub r18, r22
     sbc r19, r23
     mov r16, r16
     rjmp .normalize
+
 .do_sub_swapped:
     sub r22, r18
     sbc r23, r19
@@ -2940,25 +2995,40 @@ f16_add:
     mov r19, r23
     mov r16, r20
     rjmp .normalize
+
 .do_add:
     add r18, r22
     adc r19, r23
     mov r16, r16
+
 .normalize:
     ldi r26, 4
     cp r19, r26
-    brlo .norm_shift_left
+    ; original: brlo .norm_shift_left
+    brsh .skip11
+    rjmp .norm_shift_left
+.skip11:
+
     lsr r18
     ror r19
     inc r17
     rjmp .pack_result
+
 .norm_shift_left:
     tst r19
-    brne .pack_result
+    ; original: brne .pack_result
+    breq .skip12
+    rjmp .pack_result
+.skip12:
+
     lsl r18
     rol r19
     dec r17
-    brne .norm_shift_left
+    ; original: brne .norm_shift_left
+    breq .skip13
+    rjmp .norm_shift_left
+.skip13:
+
 .pack_result:
     mov r28, r18
     mov r29, r19
@@ -2971,15 +3041,18 @@ f16_add:
     ; mover resultado para convenção externa (r24:r25)
     mov r24, r22
     mov r25, r23
-    jmp .end
+    rjmp .end
+
 .return_a:
     mov r24, r30
     mov r25, r31
-    jmp .end
+    rjmp .end
+
 .return_b:
     mov r24, r24
     mov r25, r25
-    jmp .end
+    rjmp .end
+
 .end:
     pop r29
     pop r28
@@ -3034,8 +3107,8 @@ f16_mul:
     mov r26, r17
     add r26, r21
     subi r26, 15
-    sbi r19, 2
-    sbi r23, 2
+    ori r19, (1<<2)
+    ori r23, (1<<2)
     mov r24, r18
     mov r25, r22
     mul r24, r25
@@ -3313,8 +3386,14 @@ def traduzirAtribuicao(inst):
     if isinstance(A, int):
         lo = A & 0xFF
         hi = (A >> 8) & 0xFF
-        codigo += f"    ldi r20, {lo}\n"
-        codigo += f"    ldi r21, {hi}\n"
+        codigo += f"    ldi r20, 0x{lo:02X}\n"
+        codigo += f"    ldi r21, 0x{hi:02X}\n"
+    elif isinstance(A, float) and tipo_a == 'float':
+        ieee_value = float_to_ieee754_half(A)
+        lo = ieee_value & 0xFF
+        hi = (ieee_value >> 8) & 0xFF
+        codigo += f"    ldi r20, 0x{lo:02X}\n"
+        codigo += f"    ldi r21, 0x{hi:02X}\n"
     else:
         # Carrega de outra variável
         codigo += f"    lds r20, {A}\n"
@@ -3337,21 +3416,44 @@ def traduzirIfFalse(inst):
 
     codigo = f"\n; ifFalse {cond} goto {destino}\n"
     
-    # Carrega a condição
-    if isinstance(cond, int):
-        lo = cond & 0xFF
-        hi = (cond >> 8) & 0xFF
-        codigo += f"    ldi r16, {lo}\n"
-        codigo += f"    ldi r17, {hi}\n"
+    # Caso 1: condição é comparação (dict)
+    if isinstance(cond, dict) and cond.get("op") in ["<=", "<", ">", ">=", "==", "!="]:
+        op = cond["op"]
+        a = cond["a"]
+        b = cond["b"]
+
+        codigo += f"    lds r16, {a}\n"
+        codigo += f"    lds r17, {a}+1\n"
+        codigo += f"    lds r18, {b}\n"
+        codigo += f"    lds r19, {b}+1\n"
+
+        codigo += "    cp r16, r18\n"
+        codigo += "    cpc r17, r19\n"
+
+        if op == "<=": codigo += f"    brgt {destino}\n"
+        elif op == "<": codigo += f"    brge {destino}\n"
+        elif op == ">=": codigo += f"    brlt {destino}\n"
+        elif op == ">": codigo += f"    brle {destino}\n"
+        elif op == "==": codigo += f"    brne {destino}\n"
+        elif op == "!=": codigo += f"    breq {destino}\n"
+
+        return codigo
+
+    # Caso 2: condição é número ou variável (como INDICE)
     else:
-        codigo += f"    lds r16, {cond}\n"
-        codigo += f"    lds r17, {cond}+1\n"
-    
-    # Testa se é zero (falso)
-    codigo += f"    or r16, r17\n"      # OR dos dois bytes
-    codigo += f"    breq {destino}\n"   # Se zero, pula
-    
-    return codigo
+        if isinstance(cond, int):
+            lo = cond & 0xFF
+            hi = (cond >> 8) & 0xFF
+            codigo += f"    ldi r16, 0x{lo:02X}\n"
+            codigo += f"    ldi r17, 0x{hi:02X}\n"
+        else:
+            codigo += f"    lds r16, {cond}\n"
+            codigo += f"    lds r17, {cond}+1\n"
+        
+        codigo += "    or r16, r17\n"
+        codigo += f"    breq {destino}\n"
+
+        return codigo
 
 def traduzirComparacao(inst):
     """Gera código para comparação entre valores"""
@@ -3407,7 +3509,7 @@ def traduzirPrint(inst):
     if isinstance(A, int):
         lo = A & 0xFF
         hi = (A >> 8) & 0xFF
-        codigo += f"    ldi r24, {lo}\n    ldi r25, {hi}\n"
+        codigo += f"    ldi r24, 0x{lo:02X}\n    ldi r25, 0x{hi:02X}\n"
     else:
         codigo += f"    lds r24, {A}\n    lds r25, {A}+1\n"
     
