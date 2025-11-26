@@ -465,9 +465,6 @@ def construirGramatica() -> tuple:
 
 def coletar_atribuicoes(tokens_valores: list) -> set:
     atribuicoes = set()
-    
-    print(f"    [DEBUG COLETAR_ATRIBUICOES] Tokens: {tokens_valores}")
-
     # ESTRATÉGIA MELHORADA: Procura por padrões de atribuição em RPN
     # Padrão: número seguido de identificador (dentro de parênteses)
     
@@ -485,7 +482,6 @@ def coletar_atribuicoes(tokens_valores: list) -> set:
                     tokens_valores[j + 1] not in ['(', ')', '+', '-', '*', '/', '<=', '>=', 'WHILE', 'IF']):
                     
                     atribuicoes.add(tokens_valores[j + 1])
-                    print(f"    [DEBUG COLETAR_ATRIBUICOES] Atribuição detectada: {tokens_valores[j]} → {tokens_valores[j + 1]}")
                     j += 2
                 else:
                     j += 1
@@ -493,7 +489,6 @@ def coletar_atribuicoes(tokens_valores: list) -> set:
         else:
             i += 1
 
-    print(f"    [DEBUG COLETAR_ATRIBUICOES] Atribuições encontradas: {atribuicoes}")
     return atribuicoes
 
 def tokens_processaveis_de(tokens_valores: list) -> list:
@@ -932,7 +927,6 @@ def processar_relacional(op, no1, no2, tac):
         'tipo': 'bool'
     }
 
-
 def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: dict, regras_semanticas: dict, historico_resultados: list, numero_linha: int):
     ctx = criar_contexto()
     atribuicoes_nomes = coletar_atribuicoes(tokens_valores)
@@ -940,15 +934,12 @@ def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: di
     memorias_declaradas_nesta_linha = ctx['memorias_decl_nesta_linha']
     eps = globals().get('EPS', 'E')
 
-    print(f"\n    [DEBUG DERIVACAO] Mostrando primeiras 30 produções:")
     for i, (nt, prod) in enumerate(derivacao[:30], 1):
         prod_str = ' '.join(str(p) for p in prod) if prod else 'ε'
         print(f"      {i:2d}. {nt:10s} → {prod_str}")
     if len(derivacao) > 30:
         print(f"      ... ({len(derivacao) - 30} produções omitidas)")
     print()
-
-    print(f"    [DEBUG SEMANTICO TOKENS] {tokens_processaveis}")
 
     # Processa todas as produções em ordem
     for idx_derivacao, (nao_terminal, producao) in enumerate(derivacao):
@@ -996,7 +987,6 @@ def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: di
     return (tabela_simbolos, ctx['erros'], ctx['arvore_anotada'], 
             tipo_final, memorias_declaradas_nesta_linha)
 
-
 def criar_contexto() -> dict:
     return {
         'erros': [],
@@ -1007,7 +997,6 @@ def criar_contexto() -> dict:
         'idx_valor': 0,
         'memorias_decl_nesta_linha': set()
     }
-
 
 def processar_comparacao(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int) -> None:
     regra = regras_semanticas.get('operadores_relacionais', {}).get(simbolo, {'aceita': []})
@@ -1252,7 +1241,6 @@ def gerar_tac_operacao(no: dict, tac: list) -> dict:
         'kind': 'temp'
     }
 
-
 def gerar_tac_comparacao(no: dict, tac: list) -> dict:
     """Gera TAC para operações relacionais."""
     operador = no.get('operador')
@@ -1353,13 +1341,16 @@ def gerar_tac_if(no: dict, tac: list) -> dict:
 def gerar_tac_while(no, tac):
     """
     Gera TAC para estrutura de repetição WHILE.
-    Versão EXTREMAMENTE TOLERANTE - procura por qualquer condição booleana.
-    """
-    print(f"\n    [DEBUG TAC WHILE] Gerando TAC para WHILE")
+    Processa TODOS os nós do corpo, incluindo incrementos.
     
+    Estrutura esperada em RPN:
+    (condição corpo WHILE)
+    
+    Onde corpo contém pares: [expressão] [variável] para cada atribuição
+    """
+
     # Extrai condição e corpo
     no_condicao = no.get('condicao')
-    atribuicoes = no.get('corpo', [])
     corpo_nos = no.get('corpo_nos', [])
     
     if not no_condicao:
@@ -1367,8 +1358,11 @@ def gerar_tac_while(no, tac):
         return {'temp': None, 'tipo': 'void', 'kind': 'temp'}
     
     print(f"    [DEBUG] Condição: {no_condicao.get('tipo_no')}")
-    print(f"    [DEBUG] Atribuições no corpo: {len(atribuicoes)}")
     print(f"    [DEBUG] Total de nós no corpo: {len(corpo_nos)}")
+    
+    # Debug: mostra estrutura do corpo
+    for i, n in enumerate(corpo_nos):
+        print(f"    [DEBUG] Corpo[{i}]: {n.get('tipo_no')} - {n.get('nome', n.get('operador', '?'))}")
     
     # Labels para o loop
     label_inicio = novo_label()
@@ -1394,28 +1388,45 @@ def gerar_tac_while(no, tac):
         'comment': 'se condição falsa, sair do loop'
     })
     
-    # Processa corpo (atribuições)
-    for atrib in atribuicoes:
-        if atrib.get('tipo') == 'atribuicao':
-            # Atribuição: variavel = expressao
-            var = atrib.get('variavel')
-            expr = atrib.get('expressao')
+    # CORREÇÃO PRINCIPAL: Processa TODOS os nós do corpo em pares
+    # Em RPN, atribuições aparecem como: [expressão] [variável]
+    i = 0
+    atribuicoes_geradas = 0
+    
+    while i < len(corpo_nos):
+        if i + 1 < len(corpo_nos):
+            no_expr = corpo_nos[i]
+            no_var = corpo_nos[i + 1]
             
-            # Processa expressão
-            info_expr = processar_no_tac(expr, tac)
-            temp_expr = info_expr.get('temp')
-            tipo_expr = info_expr.get('tipo', 'int')
-            
-            # Gera atribuição
-            tac.append({
-                'op': '=',
-                'a': temp_expr,
-                'dest': var,
-                'tipo': tipo_expr,
-                'comment': f'{var} = {temp_expr}'
-            })
-            
-            print(f"    [DEBUG] Gerado: {var} = {temp_expr}")
+            # Se próximo nó é ATRIBUICAO ou LEITURA_VARIAVEL, é atribuição
+            if no_var.get('tipo_no') in ['ATRIBUICAO', 'LEITURA_VARIAVEL']:
+                var_nome = no_var.get('nome')
+                
+                # Ignora operadores e palavras-chave
+                if var_nome not in ['(', ')', '+', '-', '*', '/', '<=', '>=', 'WHILE', 'IF', '<', '>', '==', '!=']:
+                    # Processa a expressão (pode ser operação, literal ou leitura)
+                    info_expr = processar_no_tac(no_expr, tac)
+                    temp_expr = info_expr.get('temp')
+                    tipo_expr = info_expr.get('tipo', 'int')
+                    
+                    # Gera atribuição
+                    tac.append({
+                        'op': '=',
+                        'a': temp_expr,
+                        'dest': var_nome,
+                        'tipo': tipo_expr,
+                        'comment': f'atribuição no loop: {var_nome} = {temp_expr}'
+                    })
+                    
+                    atribuicoes_geradas += 1
+                    print(f"    [DEBUG] Gerado: {var_nome} = {temp_expr}")
+                    i += 2
+                    continue
+        
+        # Se não formar par de atribuição, apenas processa o nó
+        # (pode ser parte de expressões complexas)
+        processar_no_tac(corpo_nos[i], tac)
+        i += 1
     
     # Volta para início do loop
     tac.append({
@@ -1431,14 +1442,14 @@ def gerar_tac_while(no, tac):
         'comment': 'fim do while'
     })
     
-    print(f"    [DEBUG] TAC WHILE gerado com {len(atribuicoes)} atribuições")
+    print(f"    [DEBUG] TAC WHILE gerado com {atribuicoes_geradas} atribuições")
     
     return {
         'temp': None,
         'tipo': 'void',
         'kind': 'temp'
-    }
-    
+    }   
+
 def gerar_tac_res(no: dict, tac: list) -> dict:
     """
     Gera TAC para comando RES.
@@ -2034,8 +2045,7 @@ def mapear_variaveis(tac, tabela_simbolos):
             if val and isinstance(val, str):
                 # Ignora labels, registradores e operadores
                 if (not val.startswith('L') and 
-                    not val.startswith('r') and 
-                    not val.startswith('t') and
+                    not val.startswith('r') and
                     val not in ['label', 'goto', 'ifFalse', 'print'] and
                     len(val) > 0):
                     
@@ -2962,7 +2972,6 @@ def traduzirOperacaoAritmetica(inst):
     
     return codigo
 
-
 def traduzirAtribuicao(inst):
     A = inst.get("a")
     D = inst.get("dest")
@@ -3049,6 +3058,11 @@ def traduzirComparacao(inst):
     B = inst.get("b")
     D = inst.get("dest")
     op = inst.get("op")
+
+    # Gera labels únicos usando contador global ao invés do nome do destino
+    label_id = novo_label().replace('L', '')  # Remove 'L' para ficar só o número
+    label_true = f"_cmp_true_{label_id}"
+    label_end  = f"_cmp_end_{label_id}"
     
     codigo = f"\n; {D} = {A} {op} {B}\n"
     
@@ -3058,30 +3072,31 @@ def traduzirComparacao(inst):
     codigo += "    cp  r18, r20\n"
     codigo += "    cpc r19, r21\n"
 
+    # zera false (resultado padrão)
     codigo += "    ldi r24, 0\n"
     codigo += "    ldi r25, 0\n"
     
     # Define resultado baseado no operador
     if op == "<":
-        codigo += "    brlo _cmp_true\n"
+        codigo += f"    brlo {label_true}\n"
     elif op == "<=":
-        codigo += "    brlo _cmp_true\n"
-        codigo += "    breq _cmp_true\n"
+        codigo += f"    brlo {label_true}\n"
+        codigo += f"    breq {label_true}\n"
     elif op == ">":
-        codigo += "    brsh _cmp_false\n"
-        codigo += "    rjmp _cmp_true\n"
+        codigo += f"    brsh {label_end}\n"
+        codigo += f"    rjmp {label_true}\n"
     elif op == ">=":
-        codigo += "    brlo _cmp_false\n"
-        codigo += "    rjmp _cmp_true\n"
+        codigo += f"    brlo {label_end}\n"
+        codigo += f"    rjmp {label_true}\n"
     elif op == "==":
-        codigo += "    breq _cmp_true\n"
+        codigo += f"    breq {label_true}\n"
     elif op == "!=":
-        codigo += "    brne _cmp_true\n"
+        codigo += f"    brne {label_true}\n"
 
-    codigo += "    rjmp _cmp_end\n"
-    codigo += "_cmp_true:\n"
+    codigo += f"    rjmp {label_end}\n"
+    codigo += f"{label_true}:\n"
     codigo += "    ldi r24, 1\n"
-    codigo += "_cmp_end:\n"
+    codigo += f"{label_end}:\n"
 
     codigo += f"    sts {D}, r24\n"
     codigo += f"    sts {D}+1, r25\n"

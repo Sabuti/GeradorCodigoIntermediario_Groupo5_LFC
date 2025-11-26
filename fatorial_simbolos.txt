@@ -1,0 +1,24 @@
+============================================================
+TABELA DE SÍMBOLOS
+============================================================
+
+Símbolo: FATORIAL
+----------------------------------------
+  Tipo: int
+  Inicializada: Sim
+  Valor: None
+  Linha declaração: 1
+  Escopo: global
+  Usada: Sim
+  Linhas de uso: 3, 4
+
+Símbolo: I
+----------------------------------------
+  Tipo: int
+  Inicializada: Sim
+  Valor: None
+  Linha declaração: 2
+  Escopo: global
+  Usada: Sim
+  Linhas de uso: 3
+

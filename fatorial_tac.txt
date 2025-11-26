@@ -1,0 +1,20 @@
+============================================================
+THREE ADDRESS CODE (TAC)
+============================================================
+
+  t1 = I <= 5
+    ; comparison <=
+  t2 = FATORIAL * I
+    ; * operation
+L1:
+    ; início do while
+  t3 = I <= 5
+    ; comparison <=
+  ifFalse t3 goto L2
+    ; se condição falsa, sair do loop
+  goto L1
+    ; voltar para verificar condição
+L2:
+    ; fim do while
+
+============================================================
