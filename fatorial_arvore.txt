@@ -1,0 +1,73 @@
+============================================================
+RELATÓRIO DE ANÁLISE SEMÂNTICA
+============================================================
+
+Linha 1:
+------------------------------------------------------------
+Tipo inferido: int
+
+Árvore Sintática Abstrata Atribuída:
+[PROGRAMA] tipo: int
+  filhos:
+    [LITERAL] tipo: int
+      valor: 1
+    [ATRIBUICAO] tipo: N/A
+      nome: FATORIAL
+
+Linha 2:
+------------------------------------------------------------
+Tipo inferido: int
+
+Árvore Sintática Abstrata Atribuída:
+[PROGRAMA] tipo: int
+  filhos:
+    [LITERAL] tipo: int
+      valor: 1
+    [ATRIBUICAO] tipo: N/A
+      nome: I
+
+Linha 3:
+------------------------------------------------------------
+Tipo inferido: void
+
+Árvore Sintática Abstrata Atribuída:
+[PROGRAMA] tipo: void
+  filhos:
+    [LEITURA_VARIAVEL] tipo: int
+      nome: I
+    [LITERAL] tipo: int
+      valor: 5
+    [COMPARACAO] tipo: booleano
+      comparador: <=
+      operandos: [{'tipo_no': 'LEITURA_VARIAVEL', 'nome': 'I', 'tipo_inferido': 'int', 'linha': 3}, {'tipo_no': 'LITERAL', 'tipo_inferido': 'int', 'valor': 5, 'linha': 3}]
+    [LEITURA_VARIAVEL] tipo: int
+      nome: FATORIAL
+    [LEITURA_VARIAVEL] tipo: int
+      nome: I
+    [OPERACAO] tipo: int
+      operador: *
+      operandos: [{'tipo_no': 'LEITURA_VARIAVEL', 'nome': 'FATORIAL', 'tipo_inferido': 'int', 'linha': 3}, {'tipo_no': 'LEITURA_VARIAVEL', 'nome': 'I', 'tipo_inferido': 'int', 'linha': 3}]
+    [LEITURA_VARIAVEL] tipo: int
+      nome: FATORIAL
+    [LOOP_WHILE] tipo: void
+      condição tipo: booleano
+      corpo tipo: None
+
+Linha 4:
+------------------------------------------------------------
+Tipo inferido: int
+
+Árvore Sintática Abstrata Atribuída:
+[PROGRAMA] tipo: int
+  filhos:
+    [LEITURA_VARIAVEL] tipo: int
+      nome: FATORIAL
+
+============================================================
+TABELA DE SÍMBOLOS (resumo)
+============================================================
+
+Nome            Tipo       Inicializada Linha  Usada 
+------------------------------------------------------------
+FATORIAL        int        Sim          1      Sim   
+I               int        Sim          2      Sim   

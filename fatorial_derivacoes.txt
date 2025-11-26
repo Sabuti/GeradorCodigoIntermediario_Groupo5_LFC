@@ -1,0 +1,95 @@
+============================================================
+RELATÓRIO DE ANÁLISE SINTÁTICA
+============================================================
+
+Linha 1:
+------------------------------------------------------------
+Total de produções: 9
+
+Derivação (produções aplicadas):
+   1. LINHA      → EXPR
+   2. EXPR       → ( ITEMS )
+   3. ITEMS      → ITEM ITEMS
+   4. ITEM       → NUMERO
+   5. NUMERO     → int
+   6. ITEMS      → ITEM ITEMS
+   7. ITEM       → IDENT
+   8. IDENT      → ident
+   9. ITEMS      → E
+
+Linha 2:
+------------------------------------------------------------
+Total de produções: 9
+
+Derivação (produções aplicadas):
+   1. LINHA      → EXPR
+   2. EXPR       → ( ITEMS )
+   3. ITEMS      → ITEM ITEMS
+   4. ITEM       → NUMERO
+   5. NUMERO     → int
+   6. ITEMS      → ITEM ITEMS
+   7. ITEM       → IDENT
+   8. IDENT      → ident
+   9. ITEMS      → E
+
+Linha 3:
+------------------------------------------------------------
+Total de produções: 43
+
+Derivação (produções aplicadas):
+   1. LINHA      → EXPR
+   2. EXPR       → ( ITEMS )
+   3. ITEMS      → ITEM ITEMS
+   4. ITEM       → EXPR
+   5. EXPR       → ( ITEMS )
+   6. ITEMS      → ITEM ITEMS
+   7. ITEM       → EXPR
+   8. EXPR       → ( ITEMS )
+   9. ITEMS      → ITEM ITEMS
+  10. ITEM       → IDENT
+  11. IDENT      → ident
+  12. ITEMS      → ITEM ITEMS
+  13. ITEM       → NUMERO
+  14. NUMERO     → int
+  15. ITEMS      → ITEM ITEMS
+  16. ITEM       → OPERADOR
+  17. OPERADOR   → <=
+  18. ITEMS      → E
+  19. ITEMS      → E
+  20. ITEMS      → ITEM ITEMS
+  21. ITEM       → EXPR
+  22. EXPR       → ( ITEMS )
+  23. ITEMS      → ITEM ITEMS
+  24. ITEM       → EXPR
+  25. EXPR       → ( ITEMS )
+  26. ITEMS      → ITEM ITEMS
+  27. ITEM       → IDENT
+  28. IDENT      → ident
+  29. ITEMS      → ITEM ITEMS
+  30. ITEM       → IDENT
+  31. IDENT      → ident
+  32. ITEMS      → ITEM ITEMS
+  33. ITEM       → OPERADOR
+  34. OPERADOR   → *
+  35. ITEMS      → E
+  36. ITEMS      → ITEM ITEMS
+  37. ITEM       → IDENT
+  38. IDENT      → ident
+  39. ITEMS      → E
+  40. ITEMS      → ITEM ITEMS
+  41. ITEM       → WHILEKW
+  42. WHILEKW    → while
+  43. ITEMS      → E
+
+Linha 4:
+------------------------------------------------------------
+Total de produções: 6
+
+Derivação (produções aplicadas):
+   1. LINHA      → EXPR
+   2. EXPR       → ( ITEMS )
+   3. ITEMS      → ITEM ITEMS
+   4. ITEM       → IDENT
+   5. IDENT      → ident
+   6. ITEMS      → E
+
