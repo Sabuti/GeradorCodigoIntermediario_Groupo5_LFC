@@ -465,54 +465,36 @@ def construirGramatica() -> tuple:
 
 def coletar_atribuicoes(tokens_valores: list) -> set:
     atribuicoes = set()
-    profundidade = 0
-    elementos_expr = []
+    
+    print(f"    [DEBUG COLETAR_ATRIBUICOES] Tokens: {tokens_valores}")
 
-    for token in tokens_valores:
+    # ESTRATÉGIA MELHORADA: Procura por padrões de atribuição em RPN
+    # Padrão: número seguido de identificador (dentro de parênteses)
+    
+    i = 0
+    while i < len(tokens_valores):
+        token = tokens_valores[i]
+        
         if token == '(':
-            if profundidade == 0:
-                elementos_expr = []
-            profundidade += 1
-            continue
-
-        if token == ')':
-            profundidade -= 1
-            if profundidade == 0 and len(elementos_expr) == 2:
-                tipo1, _ = elementos_expr[0]
-                tipo2, nome2 = elementos_expr[1]
-                if tipo2 == 'ident' and nome2 is not None:
-                    if tipo1 in ['int', 'float', 'ident', 'res', 'subexpr']:
-                        atribuicoes.add(nome2)
-            elementos_expr = []
-            continue
-
-        if profundidade == 1:
-            if isinstance(token, int):
-                elementos_expr.append(('int', None))
-            elif isinstance(token, float):
-                elementos_expr.append(('float', None))
-            elif isinstance(token, str):
-                tl = token.lower()
-                if tl in ['res', 'if', 'while']:
-                    elementos_expr.append((tl, None))
-                elif token in ['+', '-', '*', '/', '%', '^', '|',
-                               '<', '>', '<=', '>=', '==', '!=']:
-                    elementos_expr.append(('op', token))
+            # Dentro de parênteses, procura por padrão: valor identificador
+            j = i + 1
+            while j < len(tokens_valores) and tokens_valores[j] != ')':
+                if (isinstance(tokens_valores[j], (int, float)) and 
+                    j + 1 < len(tokens_valores) and 
+                    isinstance(tokens_valores[j + 1], str) and
+                    tokens_valores[j + 1] not in ['(', ')', '+', '-', '*', '/', '<=', '>=', 'WHILE', 'IF']):
+                    
+                    atribuicoes.add(tokens_valores[j + 1])
+                    print(f"    [DEBUG COLETAR_ATRIBUICOES] Atribuição detectada: {tokens_valores[j]} → {tokens_valores[j + 1]}")
+                    j += 2
                 else:
-                    elementos_expr.append(('ident', token))
+                    j += 1
+            i = j
+        else:
+            i += 1
 
+    print(f"    [DEBUG COLETAR_ATRIBUICOES] Atribuições encontradas: {atribuicoes}")
     return atribuicoes
-
-def criar_contexto() -> dict:
-    return {
-        'erros': [],
-        'arvore_anotada': [],
-        'pilha_nos': [],
-        'pilha_tipos': [],
-        'pilha_valores': [],
-        'idx_valor': 0,
-        'memorias_decl_nesta_linha': set()
-    }
 
 def tokens_processaveis_de(tokens_valores: list) -> list:
     return [v for v in tokens_valores if v not in ('(', ')')]
@@ -539,75 +521,94 @@ def consumir_literal(ctx: dict, tokens_proc: list, tipo: str, linha: int) -> Non
     ctx['pilha_valores'].append(valor)
     ctx['arvore_anotada'].append(no_literal)
 
-def processar_identificador(ctx: dict, tokens_proc: list, tabela_simbolos: dict, atribuicoes: set, linha: int) -> dict:
-    if ctx['idx_valor'] >= len(tokens_proc):
+def processar_identificador(ctx, tokens_processaveis, tabela_simbolos, atribuicoes, linha):
+    """Processa identificadores (variáveis), tratando atribuição e leitura."""
+
+    # Consome próximo token
+    if ctx['idx_valor'] >= len(tokens_processaveis):
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {linha}]: Token inesperado ao processar identificador."
+            f"ERRO SEMÂNTICO [Linha {linha}]: Identificador esperado, mas tokens acabaram."
         )
         return tabela_simbolos
 
-    nome = tokens_proc[ctx['idx_valor']]
+    ident = tokens_processaveis[ctx['idx_valor']]
     ctx['idx_valor'] += 1
 
-    if nome in ['(', ')', '+', '-', '*', '/', '%', '^', '|',
-                '<', '>', '<=', '>=', '==', '!=', 'IF', 'WHILE', 'RES', 'res']:
-        ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {linha}]: Token '{nome}' não é identificador válido."
-        )
-        return tabela_simbolos
-
-    if nome in atribuicoes:
-        if not ctx['pilha_tipos']:
-            ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {linha}]: Atribuição sem valor para '{nome}'."
-            )
-            return tabela_simbolos
-
-        tipo_valor = ctx['pilha_tipos'].pop()
-        valor = ctx['pilha_valores'].pop() if ctx['pilha_valores'] else None
-
-        tabela_simbolos = adicionarSimbolo(
-            tabela_simbolos, nome, tipo_valor, True, valor, linha
-        )
-
-        ctx['memorias_decl_nesta_linha'].add(nome)
-
-        no_leitura = {
-            'tipo_no': 'LEITURA_VARIAVEL',
-            'tipo_inferido': tipo_valor,
-            'nome': nome,
+    # Se for atribuição detectada em coletar_atribuicoes
+    if ident in atribuicoes:
+        no_ident = {
+            'tipo_no': 'ATRIBUICAO',
+            'nome': ident,
             'linha': linha
         }
+        ctx['pilha_nos'].append(no_ident)
+        ctx['pilha_tipos'].append('int')
+        ctx['pilha_valores'].append(None)
+        ctx['arvore_anotada'].append(no_ident)
 
-        ctx['pilha_nos'].append(no_leitura)
-        ctx['pilha_tipos'].append(tipo_valor)
-        ctx['pilha_valores'].append(valor)
-        ctx['arvore_anotada'].append(no_leitura)
+        # Registro na tabela de símbolos
+        tabela_simbolos = adicionarSimbolo(
+            tabela_simbolos,
+            ident,
+            tipo='int',
+            inicializada=True,
+            valor=None,
+            linha=linha
+        )
 
         return tabela_simbolos
 
-    info = buscarSimbolo(tabela_simbolos, nome)
+    # Caso contrário: leitura de variável
+    info = buscarSimbolo(tabela_simbolos, ident)
 
     if info is None:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {linha}]: Variável '{nome}' usada sem declaração."
+            f"ERRO SEMÂNTICO [Linha {linha}]: Variável '{ident}' usada sem declaração."
+        )
+        tabela_simbolos = adicionarSimbolo(
+            tabela_simbolos,
+            ident,
+            tipo='desconhecido',
+            inicializada=False,
+            linha=linha
         )
         tipo = 'desconhecido'
-        valor = 'X'
-        tabela_simbolos = adicionarSimbolo(tabela_simbolos, nome, tipo, False, valor, linha)
-
-    elif not info.get('inicializada', False):
-        ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {linha}]: Variável '{nome}' usada sem inicialização."
-        )
-        tipo = info.get('tipo', 'desconhecido')
-        valor = 'X'
+        valor = None
 
     else:
         tipo = info.get('tipo', 'desconhecido')
         valor = info.get('valor')
-        marcarSimboloUsado(tabela_simbolos, nome, linha)
+        marcarSimboloUsado(tabela_simbolos, ident, linha)
 
+    no_leitura = {
+        'tipo_no': 'LEITURA_VARIAVEL',
+        'nome': ident,
+        'tipo_inferido': tipo,
+        'linha': linha
+    }
+
+    ctx['pilha_nos'].append(no_leitura)
+    ctx['pilha_tipos'].append(tipo)
+    ctx['pilha_valores'].append(valor)
+    ctx['arvore_anotada'].append(no_leitura)
+
+    return tabela_simbolos
+
+    # Leitura de variável: se não declarada, adicionar com tipo desconhecido (mantém pilha coerente)
+    info = buscarSimbolo(tabela_simbolos, nome)
+    if info is None:
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {linha}]: Variável '{nome}' usada sem declaração.")
+        tipo = 'desconhecido'
+        valor = 'X'
+        tabela_simbolos = adicionarSimbolo(tabela_simbolos, nome, tipo, False, valor, linha)
+    elif not info.get('inicializada', False):
+        ctx['erros'].append(f"ERRO SEMÂNTICO [Linha {linha}]: Variável '{nome}' usada sem inicialização.")
+        tipo = info.get('tipo', 'desconhecido')
+        valor = 'X'
+    else:
+        tipo = info.get('tipo', 'desconhecido')
+        valor = info.get('valor')
+        marcarSimboloUsado(tabela_simbolos, nome, linha)
 
     no_leitura = {
         'tipo_no': 'LEITURA_VARIAVEL',
@@ -616,9 +617,9 @@ def processar_identificador(ctx: dict, tokens_proc: list, tabela_simbolos: dict,
         'linha': linha
     }
 
+    ctx['pilha_nos'].append(no_leitura)
     ctx['pilha_tipos'].append(tipo)
     ctx['pilha_valores'].append(valor)
-    ctx['pilha_nos'].append(no_leitura)
     ctx['arvore_anotada'].append(no_leitura)
 
     return tabela_simbolos
@@ -712,123 +713,212 @@ def processar_res(ctx: dict, tokens_processaveis: list, historico_resultados: li
     })
 
 def processar_operador_aritmetico(ctx: dict, simbolo: str, regras_semanticas: dict, linha: int) -> None:
+    # Consumir o token do operador do stream de valores (alinha idx_valor).
+    if 'idx_valor' in ctx:
+        ctx['idx_valor'] += 1
 
-    regra = regras_semanticas.get('operadores_aritmeticos', {}).get(simbolo, {'aceita': []})
-
-    ctx['idx_valor'] += 1
-
-    # Precisa ter pelo menos dois tipos na pilha
-    if len(ctx['pilha_tipos']) < 2 or len(ctx['pilha_nos']) < 2:
+    # Desempilha operandos (topo = direita)
+    if len(ctx['pilha_nos']) < 2 or len(ctx['pilha_tipos']) < 2:
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {linha}]: "
-            f"Operação '{simbolo}' requer dois operandos."
+            f"ERRO SEMÂNTICO [Linha {linha}]: Operador '{simbolo}' requer dois operandos."
         )
+        # empilha nó desconhecido para seguir análise
+        ctx['pilha_nos'].append({'tipo_no': 'OPERACAO', 'operador': simbolo, 'tipo_inferido': 'desconhecido', 'operandos': [], 'linha': linha})
+        ctx['pilha_tipos'].append('desconhecido')
+        ctx['pilha_valores'].append(None)
+        ctx['arvore_anotada'].append({'tipo_no': 'OPERACAO', 'operador': simbolo, 'tipo_inferido': 'desconhecido', 'operandos': [], 'linha': linha})
         return
 
-    # TIPOS
-    tipo2 = ctx['pilha_tipos'].pop()
-    tipo1 = ctx['pilha_tipos'].pop()
+    no_direita = ctx['pilha_nos'].pop()
+    no_esquerda = ctx['pilha_nos'].pop()
 
-    # VALORES
-    val2 = ctx['pilha_valores'].pop() if ctx['pilha_valores'] else None
-    val1 = ctx['pilha_valores'].pop() if ctx['pilha_valores'] else None
+    tipo_direita = ctx['pilha_tipos'].pop()
+    tipo_esquerda = ctx['pilha_tipos'].pop()
 
-    # NÓS
-    no2 = ctx['pilha_nos'].pop()
-    no1 = ctx['pilha_nos'].pop()
-
-    # Verificação de tipos
-    if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
+    # Verifica compatibilidade ESTRITA (modelo Fase 4)
+    if tipo_esquerda != 'int' or tipo_direita != 'int':
         ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {linha}]: "
-            f"Operação '{simbolo}' inválida entre '{tipo1}' e '{tipo2}'."
+            f"ERRO SEMÂNTICO [Linha {linha}]: Operador '{simbolo}' inválido para '{tipo_esquerda}' e '{tipo_direita}'."
         )
 
-    # Tipo resultante
-    tipo_resultado = regra.get('resultado', tipo1)
+        no_op = {
+            'tipo_no': 'OPERACAO',
+            'operador': simbolo,
+            'tipo_inferido': 'desconhecido',
+            'operandos': [no_esquerda, no_direita],
+            'linha': linha
+        }
 
-    # Criar nó de operação
-    no_oper = {
+        ctx['pilha_nos'].append(no_op)
+        ctx['pilha_tipos'].append('desconhecido')
+        ctx['pilha_valores'].append(None)
+        ctx['arvore_anotada'].append(no_op)
+        return
+
+    # Operação válida
+    no_op = {
         'tipo_no': 'OPERACAO',
         'operador': simbolo,
-        'tipo_inferido': tipo_resultado,
-        'operandos': [no1, no2],
+        'tipo_inferido': 'int',
+        'operandos': [no_esquerda, no_direita],
         'linha': linha
     }
 
-    # Empilhar resultado
-    ctx['pilha_nos'].append(no_oper)
-    ctx['pilha_tipos'].append(tipo_resultado)
+    ctx['pilha_nos'].append(no_op)
+    ctx['pilha_tipos'].append('int')
     ctx['pilha_valores'].append(None)
+    ctx['arvore_anotada'].append(no_op)
 
-    # Inserir na árvore
-    ctx['arvore_anotada'].append(no_oper)
+def processar_estrutura_controle(ctx, simbolo, numero_linha):
+    """
+    FUNCIONAMENTO CORRIGIDO para WHILE:
+    Em RPN, a estrutura é: (condição corpo WHILE)
+    Portanto, na pilha temos: [corpo, condição] (corpo no TOPO)
+    """
+    if 'idx_valor' in ctx:
+        ctx['idx_valor'] += 1
 
-def processar_comparacao(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int) -> None:
-    regra = regras_semanticas.get('operadores_relacionais', {}).get(simbolo, {'aceita': []})
+    pilha_nos = ctx.get('pilha_nos', [])
+    pilha_tipos = ctx.get('pilha_tipos', [])
+    pilha_vals = ctx.get('pilha_valores', [])
 
-    ctx['idx_valor'] += 1
+    if simbolo == 'while':
+        print("\n" + "="*60)
+        print("PROCESSANDO WHILE - ESTRUTURA RPN")
+        print("="*60)
 
-    if len(ctx['pilha_tipos']) < 2 or len(ctx['pilha_nos']) < 2:
-        ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
-            f"Comparação '{simbolo}' requer dois operandos"
-        )
+        print(f"Pilha ANTES do WHILE ({len(pilha_nos)} nós):")
+        for i, no in enumerate(pilha_nos):
+            tipo = no.get('tipo_no')
+            info = no.get('operador', no.get('nome', '?'))
+            tipo_inf = no.get('tipo_inferido')
+            print(f"  [{i}] {tipo} - {info} : {tipo_inf}")
+
+        # Precisamos ao menos de dois nós (corpo + condição)
+        if len(pilha_nos) < 2:
+            ctx['erros'].append(f"ERRO [Linha {numero_linha}]: WHILE incompleto")
+            return
+
+        # Encontra a condição: procura do topo para baixo por nó booleano/COMPARACAO
+        no_condicao = None
+        idx_condicao = None
+        for i in range(len(pilha_nos) - 1, -1, -1):
+            no = pilha_nos[i]
+            tipo_inf = no.get('tipo_inferido')
+            if tipo_inf == 'booleano' or no.get('tipo_no') == 'COMPARACAO':
+                no_condicao = no
+                idx_condicao = i
+                break
+
+        # Se não encontrou nó booleano/COMPARACAO, use o topo como fallback (último nó)
+        if no_condicao is None:
+            idx_condicao = len(pilha_nos) - 1
+            no_condicao = pilha_nos[idx_condicao]
+
+        print(f"✓ Condição identificada (índice {idx_condicao}): {no_condicao.get('tipo_no')}({no_condicao.get('tipo_inferido')})")
+
+        # corpo_nos = nós anteriores à condição (em RPN corpo vem antes da condição)
+        corpo_nos = pilha_nos[:idx_condicao]
+        print(f"✓ Corpo: {len(corpo_nos)} nós")
+
+        # Remova da pilha todos os nós até (e incluindo) a condição.
+        # Depois, empilhe um nó LOOP_WHILE representando a estrutura
+        restante_apos = pilha_nos[idx_condicao+1:] if idx_condicao+1 <= len(pilha_nos) else []
+        ctx['pilha_nos'] = restante_apos
+
+        # Sincroniza pilha_tipos e pilha_valores removendo itens correspondentes
+        # Calcula quantos nós foram removidos
+        removidos = idx_condicao + 1
+        if len(pilha_tipos) >= removidos:
+            ctx['pilha_tipos'] = pilha_tipos[removidos:]
+        else:
+            ctx['pilha_tipos'] = []
+
+        if len(pilha_vals) >= removidos:
+            ctx['pilha_valores'] = pilha_vals[removidos:]
+        else:
+            ctx['pilha_valores'] = []
+
+        # Detecta atribuições no corpo em padrão RPN (expr seguido de LEITURA_VARIAVEL)
+        atribuicoes = []
+        i = 0
+        while i < len(corpo_nos):
+            no_atual = corpo_nos[i]
+            if i + 1 < len(corpo_nos):
+                no_proximo = corpo_nos[i + 1]
+                if (no_atual.get('tipo_no') in ['OPERACAO', 'LEITURA_VARIAVEL', 'LITERAL'] and
+                    no_proximo.get('tipo_no') == 'LEITURA_VARIAVEL' and
+                    no_proximo.get('nome') not in ['(', ')', '+', '-', '*', '/', '<=', 'WHILE']):
+                    var_dest = no_proximo.get('nome')
+                    atribuicoes.append({
+                        'tipo': 'atribuicao',
+                        'variavel': var_dest,
+                        'expressao': no_atual
+                    })
+                    print(f"  ✓ Atribuição detectada: {var_dest} = {no_atual.get('tipo_no')}")
+                    i += 2
+                    continue
+            i += 1
+
+        # Validação final da condição: aceita se tipo_inferido == 'booleano' OR nó é COMPARACAO
+        tipo_cond = no_condicao.get('tipo_inferido') if isinstance(no_condicao, dict) else None
+
+        no_while = {
+            'tipo_no': 'LOOP_WHILE',
+            'tipo_inferido': 'void',
+            'condicao': no_condicao,
+            'tipo_condicao': tipo_cond,    # <-- ADICIONADO: campo que analisarSemanticaControle usa
+            'corpo': atribuicoes,
+            'corpo_nos': corpo_nos,
+            'linha': numero_linha
+        }
+
+
+        ctx['pilha_nos'].append(no_while)
+        ctx['pilha_tipos'].append('void')
+        ctx['arvore_anotada'].append(no_while)
+
+        print(f"✓ WHILE criado com {len(atribuicoes)} atribuições no corpo")
         return
 
-    # Pega os dois operandos reais da AST
-    no2 = ctx['pilha_nos'].pop()
-    no1 = ctx['pilha_nos'].pop()
-
-    tipo2 = ctx['pilha_tipos'].pop()
-    tipo1 = ctx['pilha_tipos'].pop()
-
-    # validação
-    if tipo1 not in regra['aceita'] or tipo2 not in regra['aceita']:
-        ctx['erros'].append(
-            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
-            f"Comparação '{simbolo}' inválida entre '{tipo1}' e '{tipo2}'"
-        )
-
-    # cria nó estruturado
-    no_comparacao = {
-        'tipo_no': 'COMPARACAO',
-        'operador': simbolo,
-        'tipo_inferido': 'booleano',
-        'operandos': [no1, no2],
-        'linha': numero_linha
-    }
-
-    # empilha o nó – ESSENCIAL PARA O WHILE FUNCIONAR
-    ctx['pilha_nos'].append(no_comparacao)
-    ctx['pilha_tipos'].append('booleano')
-
-def processar_estrutura_controle(ctx, tipo, numero_linha):
-    """
-    Monta nó AST corretamente para IF e WHILE.
-    No seu formato, o padrão é pós-fixo:
-        <cond> <corpo> WHILE
-    """
-
-    if tipo == 'while':
-        # WHILE precisa de: condição + corpo
-        if len(ctx['pilha_nos']) < 2:
+    # --- IF permanece como já estava, apenas sincronizamos consumo de token se necessário ---
+    elif simbolo == 'if':
+        # caso IF: manter lógica anterior (consumir token já feito no topo)
+        if len(ctx['pilha_nos']) < 3 or len(ctx['pilha_tipos']) < 3:
             ctx['erros'].append(
-                f"ERRO SEMÂNTICO [Linha {numero_linha}]: WHILE mal formado."
+                f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF incompleto"
             )
             return
 
-        corpo = ctx['pilha_nos'].pop()     # último elemento
-        cond = ctx['pilha_nos'].pop()      # penúltimo
+        no_else = ctx['pilha_nos'].pop()
+        no_then = ctx['pilha_nos'].pop()
+        no_cond = ctx['pilha_nos'].pop()
 
-        no = {
-            'tipo_no': 'LOOP_WHILE',
-            'tipo_condicao': cond.get('tipo_inferido', 'desconhecido'),
-            'filhos': [cond, corpo]
+        tipo_else = ctx['pilha_tipos'].pop() if ctx['pilha_tipos'] else 'desconhecido'
+        tipo_then = ctx['pilha_tipos'].pop() if ctx['pilha_tipos'] else 'desconhecido'
+        tipo_cond = ctx['pilha_tipos'].pop() if ctx['pilha_tipos'] else 'desconhecido'
+
+        if tipo_cond != 'booleano':
+            ctx['erros'].append(
+                f"ERRO SEMÂNTICO [Linha {numero_linha}]: IF requer condição booleana"
+            )
+
+        tipo_resultado = promoverTipo(tipo_then, tipo_else)
+
+        no_if = {
+            'tipo_no': 'CONDICIONAL_IF',
+            'tipo_inferido': tipo_resultado,
+            'tipo_condicao': tipo_cond,
+            'tipos_ramos': [tipo_then, tipo_else],
+            'filhos': [no_cond, no_then, no_else],
+            'linha': numero_linha
         }
 
-        ctx['pilha_nos'].append(no)
-        ctx['arvore_anotada'].append(no)
+        ctx['pilha_nos'].append(no_if)
+        ctx['pilha_tipos'].append(tipo_resultado)
+        ctx['arvore_anotada'].append(no_if)
+
+        return
 
 def processar_relacional(op, no1, no2, tac):
     t1 = no1['temp']
@@ -842,29 +932,54 @@ def processar_relacional(op, no1, no2, tac):
         'tipo': 'bool'
     }
 
+
 def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: dict, regras_semanticas: dict, historico_resultados: list, numero_linha: int):
     ctx = criar_contexto()
     atribuicoes_nomes = coletar_atribuicoes(tokens_valores)
     tokens_processaveis = tokens_processaveis_de(tokens_valores)
     memorias_declaradas_nesta_linha = ctx['memorias_decl_nesta_linha']
-    eps = globals().get('EPS', None)
+    eps = globals().get('EPS', 'E')
 
-    for nao_terminal, producao in derivacao:
+    print(f"\n    [DEBUG DERIVACAO] Mostrando primeiras 30 produções:")
+    for i, (nt, prod) in enumerate(derivacao[:30], 1):
+        prod_str = ' '.join(str(p) for p in prod) if prod else 'ε'
+        print(f"      {i:2d}. {nt:10s} → {prod_str}")
+    if len(derivacao) > 30:
+        print(f"      ... ({len(derivacao) - 30} produções omitidas)")
+    print()
+
+    print(f"    [DEBUG SEMANTICO TOKENS] {tokens_processaveis}")
+
+    # Processa todas as produções em ordem
+    for idx_derivacao, (nao_terminal, producao) in enumerate(derivacao):
         if not producao:
             continue
-        if eps is not None and producao == [eps]:
+        
+        # Ignora produções epsilon/vazias e símbolos estruturais
+        is_epsilon = (producao == ['E'] or producao == [eps] or 
+                     (len(producao) == 1 and producao[0] in ['E', eps]))
+        
+        if is_epsilon:
             continue
 
         for simbolo in producao:
-            if simbolo in ['(', ')']:
+            # Ignora símbolos estruturais da gramática
+            if simbolo in ['(', ')', 'LINHA', 'EXPR', 'ITEMS', 'ITEM', 'NUMERO', 
+                          'IDENT', 'OPERADOR', 'IFKW', 'WHILEKW']:
                 continue
+
+            # DEBUG: Mostra estado atual antes de processar cada símbolo
+            if simbolo in ['+', '-', '*', '/', '<=', 'WHILE']:
+                print(f"    [DEBUG ANTES {simbolo}] Pilha: {len(ctx['pilha_nos'])} nós, {ctx['pilha_tipos']}")
 
             if simbolo == 'int':
                 consumir_literal(ctx, tokens_processaveis, 'int', numero_linha)
             elif simbolo == 'float':
                 consumir_literal(ctx, tokens_processaveis, 'float', numero_linha)
             elif simbolo == 'ident':
-                tabela_simbolos = processar_identificador(ctx, tokens_processaveis, tabela_simbolos, atribuicoes_nomes, numero_linha)
+                tabela_simbolos = processar_identificador(
+                    ctx, tokens_processaveis, tabela_simbolos, atribuicoes_nomes, numero_linha
+                )
             elif simbolo == 'res':
                 processar_res(ctx, tokens_processaveis, historico_resultados, numero_linha)
             elif simbolo in ['+', '-', '*', '/', '%', '^', '|']:
@@ -877,10 +992,84 @@ def analisarSemantica(derivacao: list, tokens_valores: list, tabela_simbolos: di
                 processar_estrutura_controle(ctx, 'while', numero_linha)
 
     tipo_final = ctx['pilha_tipos'][-1] if ctx['pilha_tipos'] else 'desconhecido'
-    memorias_declaradas_nesta_linha = ctx['memorias_decl_nesta_linha']
 
-    return (tabela_simbolos, ctx['erros'], ctx['arvore_anotada'], tipo_final, memorias_declaradas_nesta_linha)
+    return (tabela_simbolos, ctx['erros'], ctx['arvore_anotada'], 
+            tipo_final, memorias_declaradas_nesta_linha)
 
+
+def criar_contexto() -> dict:
+    return {
+        'erros': [],
+        'arvore_anotada': [],
+        'pilha_nos': [],
+        'pilha_tipos': [],
+        'pilha_valores': [],
+        'idx_valor': 0,
+        'memorias_decl_nesta_linha': set()
+    }
+
+
+def processar_comparacao(ctx: dict, simbolo: str, regras_semanticas: dict, numero_linha: int) -> None:
+    regra = regras_semanticas.get('operadores_relacionais', {}).get(simbolo, {'aceita': []})
+
+    # Consumir o token do comparador do stream de valores (alinha o idx_valor).
+    # Isso evita que o mesmo símbolo seja lido mais tarde como 'ident'.
+    if 'idx_valor' in ctx:
+        ctx['idx_valor'] += 1
+
+    print(f"    [DEBUG CMP {simbolo}] Pilha antes: {len(ctx['pilha_nos'])} nós")
+
+    # VERIFICAÇÃO ROBUSTA: Garante que há operandos suficientes
+    if len(ctx['pilha_tipos']) < 2 or len(ctx['pilha_nos']) < 2:
+        ctx['erros'].append(
+            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+            f"Comparação '{simbolo}' requer dois operandos (pilha tem {len(ctx['pilha_tipos'])})."
+        )
+
+        # Recuperação: empilha tipo booleano para continuar análise
+        ctx['pilha_tipos'].append('booleano')
+        ctx['pilha_nos'].append({
+            'tipo_no': 'COMPARACAO',
+            'operador': simbolo,
+            'tipo_inferido': 'booleano',
+            'operandos': [],
+            'linha': numero_linha
+        })
+        return
+
+    # Desempilha: topo (direita) primeiro, depois base (esquerda)
+    no_direita = ctx['pilha_nos'].pop()
+    no_esquerda = ctx['pilha_nos'].pop()
+
+    tipo_direita = ctx['pilha_tipos'].pop()
+    tipo_esquerda = ctx['pilha_tipos'].pop()
+
+    print(f"    [DEBUG CMP {simbolo}] Operandos:")
+    print(f"      Esquerda: {no_esquerda.get('tipo_no')}({tipo_esquerda})")
+    print(f"      Direita: {no_direita.get('tipo_no')}({tipo_direita})")
+
+    # Validação
+    if tipo_esquerda not in regra['aceita'] or tipo_direita not in regra['aceita']:
+        ctx['erros'].append(
+            f"ERRO SEMÂNTICO [Linha {numero_linha}]: "
+            f"Comparação '{simbolo}' inválida entre '{tipo_esquerda}' e '{tipo_direita}'"
+        )
+
+    # Cria nó com ordem correta
+    no_comparacao = {
+        'tipo_no': 'COMPARACAO',
+        'operador': simbolo,
+        'tipo_inferido': 'booleano',
+        'operandos': [no_esquerda, no_direita],
+        'linha': numero_linha
+    }
+
+    ctx['pilha_nos'].append(no_comparacao)
+    ctx['pilha_tipos'].append('booleano')
+    ctx['arvore_anotada'].append(no_comparacao)
+
+    print(f"    [DEBUG CMP {simbolo}] Resultado: booleano empilhado")
+    
 def analisarSemanticaMemoria(tabela_simbolos: dict, numero_linha: int, memorias_declaradas_nesta_linha: list[str]) -> list[str]:
     erros = []
     for nome in memorias_declaradas_nesta_linha:
@@ -969,36 +1158,40 @@ def processar_no_tac(no: dict, tac: list) -> dict:
     tipo_no = no.get('tipo_no')
     
     if tipo_no == 'PROGRAMA':
-        # Processa todos os filhos
         resultado = None
         for filho in no.get('filhos', []):
             resultado = processar_no_tac(filho, tac)
         return resultado if resultado else {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
     
     elif tipo_no == 'LITERAL':
-        # Literais retornam valores imediatos
-        valor = no.get('valor')
-        tipo = no.get('tipo_inferido', 'int')
         return {
-            'temp': valor,
-            'tipo': tipo,
+            'temp': no.get('valor'),
+            'tipo': no.get('tipo_inferido', 'int'),
             'kind': 'imm'
         }
     
     elif tipo_no == 'LEITURA_VARIAVEL':
-        # Leitura de variável retorna o nome da variável
-        nome = no.get('nome')
-        tipo = no.get('tipo_inferido', 'int')
         return {
-            'temp': nome,
-            'tipo': tipo,
+            'temp': no.get('nome'),
+            'tipo': no.get('tipo_inferido', 'int'),
             'kind': 'var'
         }
     
     elif tipo_no == 'ATRIBUICAO':
-        # Atribuição: não gera instrução TAC aqui (já foi processada pela operação anterior)
+        # Atribuições simples (fora de loops)
         nome = no.get('nome')
         tipo = no.get('tipo_inferido', 'int')
+        valor = no.get('valor')
+        
+        if valor is not None:
+            tac.append({
+                'op': '=',
+                'a': valor,
+                'dest': nome,
+                'tipo': tipo,
+                'comment': f'atribuição inicial: {nome} = {valor}'
+            })
+        
         return {
             'temp': nome,
             'tipo': tipo,
@@ -1006,27 +1199,21 @@ def processar_no_tac(no: dict, tac: list) -> dict:
         }
     
     elif tipo_no == 'OPERACAO':
-        # Operação aritmética binária
         return gerar_tac_operacao(no, tac)
     
     elif tipo_no == 'COMPARACAO':
-        # Operação relacional
         return gerar_tac_comparacao(no, tac)
     
-    elif tipo_no == 'CONDICIONAL_IF':
-        # Estrutura condicional IF
-        return gerar_tac_if(no, tac)
-    
     elif tipo_no == 'LOOP_WHILE':
-        # Estrutura de repetição WHILE
         return gerar_tac_while(no, tac)
     
+    elif tipo_no == 'CONDICIONAL_IF':
+        return gerar_tac_if(no, tac)
+    
     elif tipo_no == 'RES':
-        # Comando especial RES
         return gerar_tac_res(no, tac)
     
     else:
-        # Nó desconhecido
         return {'temp': None, 'tipo': 'desconhecido', 'kind': 'temp'}
 
 def gerar_tac_operacao(no: dict, tac: list) -> dict:
@@ -1035,50 +1222,65 @@ def gerar_tac_operacao(no: dict, tac: list) -> dict:
     Suporta conversão automática de int para float quando necessário.
     """
     operador = no.get('operador')
-    tipos_operandos = no.get('operandos', ['int', 'int'])
+    operandos = no.get('operandos', [])
     tipo_resultado = no.get('tipo_inferido', 'int')
     
-    # Como estamos em RPN, os operandos já foram processados
-    # Precisamos recuperá-los da estrutura da árvore
-    # Por simplificação, assumimos que temos acesso aos operandos na ordem correta
+    if len(operandos) >= 2:
+        info1 = processar_no_tac(operandos[0], tac)
+        info2 = processar_no_tac(operandos[1], tac)
+        
+        temp1 = info1.get('temp')
+        temp2 = info2.get('temp')
+    else:
+        temp1 = '?'
+        temp2 = '?'
     
-    # Cria temporário para o resultado
-    temp_resultado = novo_temp()
+    temp_result = novo_temp()
     
-    # Adiciona instrução TAC
     tac.append({
         'op': operador,
-        'dest': temp_resultado,
+        'a': temp1,
+        'b': temp2,
+        'dest': temp_result,
         'tipo': tipo_resultado,
-        'tipo_a': tipos_operandos[0] if len(tipos_operandos) > 0 else 'int',
-        'tipo_b': tipos_operandos[1] if len(tipos_operandos) > 1 else 'int',
         'comment': f'{operador} operation'
     })
     
     return {
-        'temp': temp_resultado,
+        'temp': temp_result,
         'tipo': tipo_resultado,
         'kind': 'temp'
     }
 
+
 def gerar_tac_comparacao(no: dict, tac: list) -> dict:
     """Gera TAC para operações relacionais."""
     operador = no.get('operador')
-    tipos_operandos = no.get('operandos', ['int', 'int'])
+    operandos = no.get('operandos', [])
     
-    temp_resultado = novo_temp()
+    if len(operandos) >= 2:
+        info1 = processar_no_tac(operandos[0], tac)
+        info2 = processar_no_tac(operandos[1], tac)
+        
+        temp1 = info1.get('temp')
+        temp2 = info2.get('temp')
+    else:
+        temp1 = '?'
+        temp2 = '?'
+    
+    temp_result = novo_temp()
     
     tac.append({
         'op': operador,
-        'dest': temp_resultado,
+        'a': temp1,
+        'b': temp2,
+        'dest': temp_result,
         'tipo': 'booleano',
-        'tipo_a': tipos_operandos[0],
-        'tipo_b': tipos_operandos[1],
         'comment': f'comparison {operador}'
     })
     
     return {
-        'temp': temp_resultado,
+        'temp': temp_result,
         'tipo': 'booleano',
         'kind': 'temp'
     }
@@ -1149,140 +1351,94 @@ def gerar_tac_if(no: dict, tac: list) -> dict:
     }
 
 def gerar_tac_while(no, tac):
-    # print("DEBUG: gerar_tac_while received node:", no)
-
-    filhos = no.get('filhos') or []
-    if not filhos:
-        raise Exception("gerar_tac_while: nó WHILE sem filhos")
-
-    # --- 1) tentativa rápida: localizar um filho que já seja um nó de comparação/booleano ---
-    cond_node = None
-    for filho in filhos:
-        if isinstance(filho, dict):
-            if filho.get('tipo_no') == 'COMPARACAO' or filho.get('tipo_inferido') == 'booleano':
-                cond_node = filho
-                break
-
-    # --- 2) se não encontrou, processe filhos e veja retorno de processar_no_tac ---
-    cond_info = None
-    if cond_node is None:
-        # processar cada filho e avaliar o resultado retornado
-        for filho in filhos:
-            # proteja contra strings/literais que processar_no_tac não espera
-            try:
-                info = processar_no_tac(filho, tac)
-            except Exception as e:
-                # se processar_no_tac lançar, registre e continue
-                # print(f"DEBUG: processar_no_tac raised for filho {filho}: {e}")
-                info = None
-
-            # info pode ser dict com várias formas — detecte booleano de forma tolerante
-            if isinstance(info, dict):
-                # checa chaves possíveis
-                tipo = info.get('tipo') or info.get('tipo_inferido') or info.get('kind')
-                if tipo in ('booleano', 'bool', True):  # incluir variações
-                    cond_info = info
-                    # se esse filho também for AST comparacao, capture-o
-                    if isinstance(filho, dict) and filho.get('tipo_no') == 'COMPARACAO':
-                        cond_node = filho
-                    break
-
-        # se encontrou cond_info mas não cond_node, talvez info tem temp mas AST filho não é explicito
-        if cond_info is not None and cond_node is None:
-            # tentar localizar qual filho produziu esse temp (procure por filho cujo processar_no_tac retornou igual info)
-            # Para simplicidade, vamos reprocessar filhos até achar o que gera booleano e marcar como cond_node.
-            for filho in filhos:
-                try:
-                    info2 = processar_no_tac(filho, tac)
-                except Exception:
-                    info2 = None
-                if isinstance(info2, dict):
-                    tipo2 = info2.get('tipo') or info2.get('tipo_inferido')
-                    if tipo2 in ('booleano', 'bool', True):
-                        cond_info = info2
-                        cond_node = filho
-                        break
-
-    else:
-        # encontramos um cond_node (AST) — agora processe-o para obter um temp/retorno se necessário
-        try:
-            cond_info = processar_no_tac(cond_node, tac)
-        except Exception:
-            cond_info = None
-
-    # --- 3) Verificações finais: temos cond_node/cond_info?
-    if cond_node is None and cond_info is None:
-        # para diagnóstico, liste filhos e seus tipos/tipo_no
-        # print("DEBUG: WHILE children (no condition found):")
-        # for f in filhos:
-        #     print("  child:", f, "is_dict:", isinstance(f, dict), "tipo_no:", (f.get('tipo_no') if isinstance(f, dict) else None))
-        raise Exception("ERRO: WHILE requer condição booleana; nenhum filho produziu booleano")
-
-    # Se temos só cond_node (AST) mas cond_info sem temp, reprocessar cond_node para gerar temp
-    if cond_info is None and cond_node is not None:
-        cond_info = processar_no_tac(cond_node, tac)
-
-    # final sanity: certifique-se que cond_info tenha 'temp' e um tipo booleano
-    tipo_cond = None
-    if isinstance(cond_info, dict):
-        tipo_cond = cond_info.get('tipo') or cond_info.get('tipo_inferido')
-    if tipo_cond not in ('booleano', 'bool'):
-        # permitir 'booleano' palavra em português (usada no seu código) — se não, falha com diagnóstico
-        raise Exception(f"ERRO: WHILE requer condição booleana; encontrado: {cond_info}")
-
-    temp_cond = cond_info.get('temp')
-    if not temp_cond:
-        # talvez o nó comparacao tenha operandos, mas não gerou temp — tente gerar TAC da comparação explícita
-        if isinstance(cond_node, dict) and cond_node.get('tipo_no') == 'COMPARACAO':
-            # extrair operandos — eles devem ser nós que já contêm 'temp' (ou gerar eles)
-            opnds = cond_node.get('operandos', [])
-            if len(opnds) >= 2:
-                # garanta que operandos tenham temp (processando-os se necessário)
-                a_info = processar_no_tac(opnds[0], tac) if not opnds[0].get('temp') else opnds[0]
-                b_info = processar_no_tac(opnds[1], tac) if not opnds[1].get('temp') else opnds[1]
-                a_temp = (a_info.get('temp') if isinstance(a_info, dict) else opnds[0].get('temp'))
-                b_temp = (b_info.get('temp') if isinstance(b_info, dict) else opnds[1].get('temp'))
-                if not a_temp or not b_temp:
-                    raise Exception("gerar_tac_while: não foi possível obter temps dos operandos da comparação")
-                # criar temp para a comparação
-                temp_cond = novo_temp()
-                tac.append({
-                    'op': 'cmp',
-                    'operador': cond_node.get('operador'),
-                    'a': a_temp,
-                    'b': b_temp,
-                    'dest': temp_cond,
-                    'tipo': 'booleano'
-                })
-            else:
-                raise Exception("gerar_tac_while: nó COMPARACAO sem operandos")
-        else:
-            raise Exception("gerar_tac_while: condição não tem temp e não é COMPARACAO")
-
-    # --- 4) emitir labels e ifFalse
+    """
+    Gera TAC para estrutura de repetição WHILE.
+    Versão EXTREMAMENTE TOLERANTE - procura por qualquer condição booleana.
+    """
+    print(f"\n    [DEBUG TAC WHILE] Gerando TAC para WHILE")
+    
+    # Extrai condição e corpo
+    no_condicao = no.get('condicao')
+    atribuicoes = no.get('corpo', [])
+    corpo_nos = no.get('corpo_nos', [])
+    
+    if not no_condicao:
+        print("    [ERRO] WHILE sem condição")
+        return {'temp': None, 'tipo': 'void', 'kind': 'temp'}
+    
+    print(f"    [DEBUG] Condição: {no_condicao.get('tipo_no')}")
+    print(f"    [DEBUG] Atribuições no corpo: {len(atribuicoes)}")
+    print(f"    [DEBUG] Total de nós no corpo: {len(corpo_nos)}")
+    
+    # Labels para o loop
     label_inicio = novo_label()
     label_fim = novo_label()
-
-    # adicionar início
-    tac.append({'op': 'label', 'dest': label_inicio, 'comment': 'while loop start'})
-
-    # ifFalse usando temp_cond (pode ser dict temp_cond string)
-    tac.append({'op': 'ifFalse', 'a': temp_cond, 'dest': label_fim, 'tipo': 'booleano'})
-
-    # processar corpo: todos os filhos que não são a condição AST
-    for filho in filhos:
-        if filho is cond_node:
-            continue
-        # processar o nó do corpo (pode ser bloco ou várias instruções)
-        processar_no_tac(filho, tac)
-
-    # salto e fim
-    tac.append({'op': 'goto', 'dest': label_inicio})
-    tac.append({'op': 'label', 'dest': label_fim, 'comment': 'while loop end'})
-
-    # retorna info opcional
-    return {'temp': None, 'tipo': 'void', 'kind': 'temp'}
-
+    
+    # Label de início do loop
+    tac.append({
+        'op': 'label',
+        'dest': label_inicio,
+        'comment': 'início do while'
+    })
+    
+    # Avalia condição
+    info_cond = processar_no_tac(no_condicao, tac)
+    temp_cond = info_cond.get('temp')
+    
+    # Salta para fim se condição for falsa
+    tac.append({
+        'op': 'ifFalse',
+        'a': temp_cond,
+        'dest': label_fim,
+        'tipo': 'booleano',
+        'comment': 'se condição falsa, sair do loop'
+    })
+    
+    # Processa corpo (atribuições)
+    for atrib in atribuicoes:
+        if atrib.get('tipo') == 'atribuicao':
+            # Atribuição: variavel = expressao
+            var = atrib.get('variavel')
+            expr = atrib.get('expressao')
+            
+            # Processa expressão
+            info_expr = processar_no_tac(expr, tac)
+            temp_expr = info_expr.get('temp')
+            tipo_expr = info_expr.get('tipo', 'int')
+            
+            # Gera atribuição
+            tac.append({
+                'op': '=',
+                'a': temp_expr,
+                'dest': var,
+                'tipo': tipo_expr,
+                'comment': f'{var} = {temp_expr}'
+            })
+            
+            print(f"    [DEBUG] Gerado: {var} = {temp_expr}")
+    
+    # Volta para início do loop
+    tac.append({
+        'op': 'goto',
+        'dest': label_inicio,
+        'comment': 'voltar para verificar condição'
+    })
+    
+    # Label de fim do loop
+    tac.append({
+        'op': 'label',
+        'dest': label_fim,
+        'comment': 'fim do while'
+    })
+    
+    print(f"    [DEBUG] TAC WHILE gerado com {len(atribuicoes)} atribuições")
+    
+    return {
+        'temp': None,
+        'tipo': 'void',
+        'kind': 'temp'
+    }
+    
 def gerar_tac_res(no: dict, tac: list) -> dict:
     """
     Gera TAC para comando RES.
@@ -1326,22 +1482,17 @@ def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
                 f.write(f"  goto {inst['dest']}\n")
             
             elif op == 'ifFalse':
-                f.write(f"  ifFalse {inst.get('a', '?')} goto {inst['dest']}\n")
+                a = formatar_operando_tac(inst.get('a'))
+                f.write(f"  ifFalse {a} goto {inst['dest']}\n")
             
             elif op == '=':
-                a = inst.get('a', '?')
+                a = formatar_operando_tac(inst.get('a'))
                 dest = inst.get('dest')
                 f.write(f"  {dest} = {a}\n")
             
-            elif op in ['+', '-', '*', '/', '|', '%', '^']:
-                a = inst.get('a', '?')
-                b = inst.get('b', '?')
-                dest = inst.get('dest')
-                f.write(f"  {dest} = {a} {op} {b}\n")
-            
-            elif op in ['<', '>', '<=', '>=', '==', '!=']:
-                a = inst.get('a', '?')
-                b = inst.get('b', '?')
+            elif op in ['+', '-', '*', '/', '|', '%', '^', '<', '>', '<=', '>=', '==', '!=']:
+                a = formatar_operando_tac(inst.get('a'))
+                b = formatar_operando_tac(inst.get('b'))
                 dest = inst.get('dest')
                 f.write(f"  {dest} = {a} {op} {b}\n")
             
@@ -1349,6 +1500,10 @@ def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
                 a = inst.get('a')
                 dest = inst.get('dest')
                 f.write(f"  {dest} = RES({a})\n")
+            
+            elif op == 'print':
+                a = formatar_operando_tac(inst.get('a'))
+                f.write(f"  print {a}\n")
             
             else:
                 f.write(f"  {inst}\n")
@@ -1360,6 +1515,16 @@ def salvar_tac(tac: list, nome_arquivo: str = 'tac.txt') -> None:
         
         f.write("\n" + "=" * 60 + "\n")
 
+def formatar_operando_tac(operando) -> str:
+    """Formata um operando para exibição no TAC."""
+    if operando is None:
+        return "None"
+    elif isinstance(operando, (int, float)):
+        return str(operando)
+    elif isinstance(operando, str):
+        return operando
+    else:
+        return str(operando)
 # ========================================
 # OTIMIZAÇÃO DE TAC (Aluno 2)
 # ========================================
@@ -1901,9 +2066,9 @@ def gerar_secao_dados(vars_map):
 
 # gerar carregamento de operando
 def carregar_operando(op, regL, regH):
-    """Gera código para mover variável/imediato → registradores (little-endian: low em regL)"""
+    """Gera código para mover variável/imediato → registradores"""
     if isinstance(op, (int, float)):
-        # Se for float, converte para IEEE 754
+        # Números - carrega como imediato
         if isinstance(op, float):
             ieee_value = float_to_ieee754_half(op)
             lo = ieee_value & 0xFF
@@ -1912,62 +2077,47 @@ def carregar_operando(op, regL, regH):
             lo = op & 0xFF
             hi = (op >> 8) & 0xFF
         return f"\n    ldi {regL}, 0x{lo:02X}\n    ldi {regH}, 0x{hi:02X}\n"
-    elif isinstance(op, str):
-        if "." in op:
-            op = float(op)
-            ieee_value = float_to_ieee754_half(op)
-            lo = ieee_value & 0xFF
-            hi = (ieee_value >> 8) & 0xFF
-        else:
-            op = int(op)
-            lo = op & 0xFF
-            hi = (op >> 8) & 0xFF
-        return f"\n    ldi {regL}, 0x{lo:02X}\n    ldi {regH}, 0x{hi:02X}\n"
     else:
-        # assume label word (little endian)
+        # Qualquer outra coisa (strings como 'I', 'FATORIAL', 't1', etc) - carrega da memória
         return f"\n    lds {regL}, {op}\n    lds {regH}, {op}+1\n"
 
 # rotinas aritméticas já previstas (simplificadas)
-def gerar_mul16():
-    return """
-    ; --- MUL16: A=r22:r23, B=r24:r25 => Ret=r20:r21 ---
-    clr  r20
-    clr  r21
-
-    mul  r23, r25
-    mov  r20, r0
-    mov  r21, r1
-
-    mul  r22, r25
-    add  r21, r0
-
-    mul  r23, r24
-    add  r21, r0
-
+def gerar_mul16(regAL, regAH, regBL, regBH, regRL, regRH):
+    """Multiplicação 16-bit"""
+    return f"""
+    ; MUL16: {regAH}:{regAL} * {regBH}:{regBL} => {regRH}:{regRL}
+    clr  {regRL}
+    clr  {regRH}
+    mul  {regAL}, {regBL}
+    mov  {regRL}, r0
+    mov  {regRH}, r1
+    mul  {regAH}, {regBL}
+    add  {regRH}, r0
+    mul  {regAL}, {regBH}
+    add  {regRH}, r0
     clr  r1
 """
 
-def gerar_div16():
-    return """
-    ; --- DIV16 por subtrações sucessivas ---
-    clr  r20
-    clr  r21
-
-div_loop:
-    cp   r22, r24
-    cpc  r23, r25
-    brlo div_done
-
-    sub  r23, r25
-    sbc  r22, r24
-
-    inc  r21
-    brne div_loop
-    inc  r20
-    rjmp div_loop
-
-div_done:
-    ; resto em r22:r23, quociente em r20:r21
+def gerar_div16(regAL, regAH, regBL, regBH, regRL, regRH):
+    """Divisão 16-bit"""
+    label_loop = f"div_loop_{regRL}"
+    label_done = f"div_done_{regRL}"
+    return f"""
+    ; DIV16
+    clr  {regRL}
+    clr  {regRH}
+{label_loop}:
+    cp   {regAL}, {regBL}
+    cpc  {regAH}, {regBH}
+    brlo {label_done}
+    sub  {regAL}, {regBL}
+    sbc  {regAH}, {regBH}
+    inc  {regRL}
+    brne {label_loop}
+    inc  {regRH}
+    rjmp {label_loop}
+{label_done}:
+    movw r24, {regRL}
 """
 
 def gerar_pow16():
@@ -2773,67 +2923,45 @@ def traduzirInstrucaoTAC(inst):
         return f"; [ERRO] operação TAC não reconhecida: {op}\n"
     
 def traduzirOperacaoAritmetica(inst):
-    """Traduz operação com suporte a IEEE 754 half-precision"""
+    """Traduz operação aritmética para Assembly"""
     A = inst.get("a")
     B = inst.get("b")
     D = inst.get("dest")
     op = inst.get("op")
     tipo = inst.get("tipo", "int")
-    tipo_a = inst.get("tipo_a", "int")
-    tipo_b = inst.get("tipo_b", "int")
 
-    codigo = f"\n; TAC: {D} = {A} {op} {B} (tipo: {tipo})\n"
+    codigo = f"\n; TAC: {D} = {A} {op} {B}\n"
     
-    # Carrega operandos (low byte primeiro → regL, high byte → regH)
-    codigo += carregar_operando(A, "r18", "r19")  # A em r18:r19 (LO:HI)
-    codigo += carregar_operando(B, "r20", "r21")  # B em r20:r21 (LO:HI)
-    
-    # Converte int para IEEE 754 se necessário
-    if tipo == 'float':
-        if tipo_a == 'int':
-            codigo += "    movw r24, r18\n"
-            codigo += "    rcall int_to_ieee754\n"
-            codigo += "    movw r18, r24\n"
-
-        if tipo_b == 'int':
-            codigo += "    movw r24, r20\n"
-            codigo += "    rcall int_to_ieee754\n"
-            codigo += "    movw r20, r24\n"
+    # Carrega operandos
+    codigo += carregar_operando(A, "r18", "r19")
+    codigo += carregar_operando(B, "r20", "r21")
     
     if tipo == "float":
-        if op == "+":
-            codigo += "    rcall f16_add\n"
-        elif op == "-":
-            codigo += "    rcall f16_sub\n"
-        elif op == "*":
-            codigo += "    rcall f16_mul\n"
-        elif op == "/":
-            codigo += "    rcall f16_div\n"
-
-    else:  # tipo int
+        if op == "+": codigo += "    rcall f16_add\n"
+        elif op == "-": codigo += "    rcall f16_sub\n"
+        elif op == "*": codigo += "    rcall f16_mul\n"
+        elif op == "/": codigo += "    rcall f16_div\n"
+    else:  # int
         if op == "+":
             codigo += "    movw r24, r18\n"
             codigo += "    add  r24, r20\n"
             codigo += "    adc  r25, r21\n"
-
         elif op == "-":
             codigo += "    movw r24, r18\n"
             codigo += "    sub  r24, r20\n"
             codigo += "    sbc  r25, r21\n"
-
         elif op == "*":
-            codigo += gerar_mul16("r18","r19","r20","r21","r24","r25")
-
+            codigo += gerar_mul16("r18", "r19", "r20", "r21", "r22", "r23")
+            codigo += "    movw r24, r22\n"
         elif op == "/":
-            codigo += gerar_div16("r18","r19","r20","r21","r24","r25")
+            codigo += gerar_div16("r18", "r19", "r20", "r21", "r22", "r23")
     
-    # -----------------------------------------------------------
-    # Salvar resultado final em memória
-    # -----------------------------------------------------------
+    # Salva resultado
     codigo += f"    sts {D}, r24\n"
     codigo += f"    sts {D}+1, r25\n"
     
     return codigo
+
 
 def traduzirAtribuicao(inst):
     A = inst.get("a")
